@@ -1,4 +1,4 @@
-# TraXion: Co-occurrence-aware Pre-training for Multi-Entity Sparse Event Streams
+# TraXion: Rethinking Pre-training Frameworks for Mobility and Beyond
 
 This repository is the official implementation of TraXion. It is the NeurIPS
 supplementary code asset associated with the submission and is licensed under
@@ -13,6 +13,7 @@ here.
 ```
 .
 ├── config.py                # dataset path registry (env-var driven)
+├── HYPERPARAMETER_SEARCH.md # hyperparameter-selection protocol (TraXion + baselines)
 ├── cli/                     # entry-point scripts (run as python -m cli.<name>)
 │   ├── train.py             #   pre-training + anomaly fine-tune
 │   ├── train_poi.py         #   next-POI fine-tune
@@ -218,6 +219,14 @@ All evaluators print the metrics reported in the corresponding paper table
 to four decimal places. Train scripts already run a final test-set evaluation
 at the end of training; the standalone evaluators are useful for re-scoring
 released checkpoints.
+
+### 3.5 Hyperparameter selection
+
+The hyperparameter values baked into `scripts/*.sh` are the *outcome* of a
+validation-guided iterative search rather than a pre-committed grid. The same
+procedure is applied to TraXion and to every retuned baseline. See
+[`HYPERPARAMETER_SEARCH.md`](HYPERPARAMETER_SEARCH.md) for the full protocol
+and the LLM-agent prompt.
 
 
 ## 4. Mapping paper terminology to CLI flags
