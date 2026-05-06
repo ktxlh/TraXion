@@ -1,0 +1,11 @@
+torch>=2.4
+numpy
+pandas
+scipy
+scikit-learn
+tqdm
+geopandas
+shapely
+pyarrow
+umap-learn
+wandb

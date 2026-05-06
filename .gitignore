@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pkl
+*.pt
+
+# local data + run artefacts
+data/
+runs/
+wandb/
+logs/
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store

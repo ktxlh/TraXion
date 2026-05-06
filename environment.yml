@@ -1,0 +1,24 @@
+name: traxion
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.13
+  - pip
+  - pytorch=2.5.*
+  - pytorch-cuda=12.4
+  - numpy
+  - pandas
+  - scipy
+  - scikit-learn
+  - tqdm
+  - geopandas
+  - shapely
+  - pyarrow
+  - matplotlib
+  - jupyter
+  - pip:
+      - umap-learn
+      - wandb
