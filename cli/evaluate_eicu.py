@@ -4,7 +4,7 @@ Prints AUROC, AUPRC, Max-F1, and Sensitivity at 90% Specificity (4 decimals).
 
 Example::
 
-    python -m cli.evaluate_eicu --dataset eicu-demo \\
+    python -m cli.evaluate_eicu --dataset eicu-full \\
         --resume_from_checkpoint runs/eicu_<id>.pt --device cuda:0
 """
 
@@ -58,7 +58,7 @@ def main(args) -> None:
     test_stays = ensure_category_columns(test_stays, categories)
 
     labels_path = os.path.join(
-        os.path.dirname(cfg.train_data_path), "eicu_stay_labels.parquet"
+        os.path.dirname(cfg.train_data_path), f"{cfg.name}_stay_labels.parquet"
     )
     sl = pd.read_parquet(labels_path)
     sl["mortality"] = sl["mortality"].astype(np.int64)
@@ -69,7 +69,8 @@ def main(args) -> None:
 
     all_stays = pd.concat([train_stays, test_stays], ignore_index=True)
     poi_index = POIIndex(all_stays, ck_args.clique_size,
-                        overlap_min_frac=getattr(ck_args, "overlap_min_frac", 0.0))
+                        overlap_min_frac=getattr(ck_args, "overlap_min_frac", 0.0),
+                        neighbor_search=getattr(ck_args, "neighbor_search", "scan"))
 
     tab_features = None
     tab_feat_dim = 0

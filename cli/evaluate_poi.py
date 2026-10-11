@@ -101,7 +101,7 @@ def _parse_eval_args():
     )
     parser.add_argument("--run_id", type=str, default=None, help="W&B run ID")
     parser.add_argument("--device", type=str, default="cuda:3", help="Device")
-    parser.add_argument("--batch_size", type=int, default=None, help="Batch size")
+    parser.add_argument("--batch_size", type=int, default=32, help="Batch size for evaluation")
     parser.add_argument("--num_workers", type=int, default=8, help="DataLoader workers")
     parser.add_argument("--entity", type=str, default=None, help="W&B entity (default: $WANDB_ENTITY)")
     parser.add_argument("--project", type=str, default="traxion-poi", help="W&B project")
@@ -208,7 +208,7 @@ def main() -> None:
         overlap_min_frac=getattr(args, "overlap_min_frac", 0.0),
     )
 
-    batch_size = eval_args.batch_size or getattr(args, "val_batch_size", None) or 256
+    batch_size = eval_args.batch_size
     test_loader = DataLoader(
         test_data, batch_size, shuffle=False,
         collate_fn=poi_rec_collate_fn, num_workers=eval_args.num_workers,

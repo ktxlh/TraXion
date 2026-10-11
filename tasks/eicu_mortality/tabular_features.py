@@ -1,9 +1,6 @@
 """Per-stay tabular features (demographics + admit context + event aggregates).
 
-Combined with the pooled visit embedding inside MortalityModel, this lets the
-fine-tune head see exactly the same admin signal that the XGBoost full-feature
-baseline uses (~0.74 AUROC on test). Without this, CLIQUE only sees the event
-sequence and starts ~20 AUROC points behind on this small dataset.
+Concatenated with the pooled event embedding inside MortalityModel.
 
 Returns a `(feature_dict, feature_names, scaler)` tuple where `feature_dict`
 is `dict[patientunitstayid -> np.ndarray]`. The scaler is fit on the train+val

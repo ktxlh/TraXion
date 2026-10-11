@@ -1,34 +1,37 @@
 #!/usr/bin/env bash
-# Fine-tune the pre-trained TraXion backbone for anomaly detection.
+# Fine-tune the pre-trained TraXion backbone for mobility anomaly detection.
 #
 # Usage:
-#   bash scripts/finetune_anomaly.sh <dataset> <pretrain_ckpt> [variant] [extra args ...]
+#   bash scripts/finetune_anomaly.sh <dataset> <pretrain_ckpt> [route] [extra args ...]
 #
-#   variant ∈ {active, bypass}    (default: active = TraXion; bypass = TraXion-NoColoc)
+#   route ∈ {active, bypass} (default: active). bypass skips the pre-trained
+#   co-occurrence sub-layer (--no_neighbor_attn). Run both routes for each seed
+#   and keep the one selected by scripts/select_route.py.
 #
-# Per-task fine-tune settings follow Appendix Table 6 of the paper.
+# Per-task fine-tune settings follow the fine-tuning table in Appendix B.
 set -euo pipefail
 
 if [[ $# -lt 2 ]]; then
-    echo "usage: $0 <dataset> <pretrain_ckpt> [variant=active|bypass] [extra args ...]" >&2
+    echo "usage: $0 <dataset> <pretrain_ckpt> [route=active|bypass] [extra args ...]" >&2
     exit 1
 fi
 
 DATASET="$1"; CKPT="$2"; shift 2
-VARIANT="active"
+ROUTE="active"
 if [[ $# -ge 1 && ( "$1" == "active" || "$1" == "bypass" ) ]]; then
-    VARIANT="$1"; shift
+    ROUTE="$1"; shift
 fi
 
 COMMON=(
     --dataset "$DATASET"
     --finetune --resume_from_checkpoint "$CKPT"
     --lr 1e-4
+    --train_batch_size 64 --val_batch_size 256
     --no_contrastive
     --early_stopping_criterion bce_loss --ema_early_stopping
 )
 
-[[ "$VARIANT" == "bypass" ]] && COMMON+=(--no_neighbor_attn)
+[[ "$ROUTE" == "bypass" ]] && COMMON+=(--no_neighbor_attn)
 
 case "$DATASET" in
     numosim)
@@ -38,25 +41,17 @@ case "$DATASET" in
                --time_modulo weekly --clique_size 8
                --lambda_min 1e-6 --lambda_max 2)
         ;;
-    urban-atlanta|urban-berlin)
-        if [[ "$DATASET" == "urban-berlin" ]]; then
-            CSZ=4
-        else
-            CSZ=8
-        fi
+    urban-atlanta)
         EXTRA=(--num_epochs 250 --early_stopping_patience 50
                --no-perturb_timestamps --no-perturb_locations
                --no-insert_visits --behavioral_anomaly
-               --time_modulo daily --clique_size "$CSZ")
+               --time_modulo daily --clique_size 8)
         ;;
-    lanl-core)
-        # Use the LANL-specific lateral-movement perturbation; see Appendix C.6.
-        EXTRA=(--num_epochs 100 --early_stopping_patience 15
+    urban-berlin)
+        EXTRA=(--num_epochs 500 --early_stopping_patience 50
                --no-perturb_timestamps --no-perturb_locations
-               --no-insert_visits --no-behavioral_anomaly
-               --user_host_swap --user_host_swap_frac 0.3
-               --time_modulo daily --clique_size 8
-               --lambda_min 1e-3 --lambda_max 2 --lr 5e-5)
+               --no-insert_visits --behavioral_anomaly
+               --time_modulo daily --clique_size 4)
         ;;
     *)
         echo "anomaly fine-tune is not defined for $DATASET" >&2; exit 2 ;;

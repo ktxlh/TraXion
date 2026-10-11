@@ -153,7 +153,7 @@ def _parse_eval_args():
     parser = argparse.ArgumentParser(description="Evaluate a trained next-visit checkpoint")
     parser.add_argument("--run_id", type=str, default=None)
     parser.add_argument("--device", type=str, default="cuda:0")
-    parser.add_argument("--batch_size", type=int, default=None)
+    parser.add_argument("--batch_size", type=int, default=32, help="Batch size for evaluation")
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--entity", type=str, default=None,
                         help="W&B entity (default: $WANDB_ENTITY)")
@@ -263,7 +263,7 @@ def main() -> None:
         overlap_min_frac=getattr(args, "overlap_min_frac", 0.0),
     )
 
-    batch_size = eval_args.batch_size or getattr(args, "val_batch_size", None) or 256
+    batch_size = eval_args.batch_size
     test_loader = DataLoader(
         test_data, batch_size, shuffle=False,
         collate_fn=next_visit_collate_fn, num_workers=eval_args.num_workers,

@@ -111,3 +111,16 @@ def normalize_and_validate_agents(
     val_stays["agent"] = val_stays["agent"].map(agent_to_idx).astype(np.int64)
 
     return train_stays, val_stays
+
+
+def training_agent_index(train_stays: pd.DataFrame) -> pd.Index:
+    """Agent ids in the order cli/train.py assigns embedding rows.
+
+    Training splits the train partition into train/val first and then numbers
+    agents over concat(train, val) (see normalize_and_validate_agents).
+    Evaluation must rebuild the same order so each agent maps to its own row.
+    """
+    from utils.misc import split_train_to_train_val
+
+    train_split, val_split = split_train_to_train_val(train_stays)
+    return pd.Index(pd.concat([train_split["agent"], val_split["agent"]], ignore_index=True).unique())

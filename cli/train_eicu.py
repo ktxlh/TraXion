@@ -1,4 +1,4 @@
-"""Fine-tune the TraXion backbone on per-stay ICU mortality (eICU-CRD demo).
+"""Fine-tune the TraXion backbone on per-stay ICU mortality (eICU-CRD, MIMIC-IV).
 
 Loads a pretrained checkpoint via ``--resume_from_checkpoint --finetune``,
 swaps in a binary classification head pooled over each stay's event sequence,
@@ -8,10 +8,7 @@ checkpoint by validation AUROC.
 
 Example::
 
-    python -m cli.train_eicu --dataset eicu-demo --device cuda:0 \\
-        --finetune --resume_from_checkpoint runs/<pretrain_id>.pt \\
-        --lr 1e-4 --num_epochs 25 --early_stopping_patience 8 \\
-        --max_seq_len 128 --pos_weight 5.0
+    bash scripts/finetune_eicu.sh eicu-full runs/<pretrain_id>.pt --device cuda:0 --seed 1
 """
 
 from __future__ import annotations
@@ -39,6 +36,7 @@ from utils.argparse import parse_eicu_args
 from utils.dataset import POIIndex
 from utils.file_io import load_dataset_metadata, load_pois, load_stays
 from utils.info import print_parameter_distribution
+from utils.misc import cli_explicit_keys
 from utils.training_data import (
     ensure_category_columns,
     normalize_and_validate_agents,
@@ -67,14 +65,20 @@ def _sync_arch_from_checkpoint(args) -> None:
         return
     ck = torch.load(args.resume_from_checkpoint, map_location="cpu", weights_only=False)
     ck_args = ck.get("args", {})
+    explicit = cli_explicit_keys()
     for k in _ARCH_KEYS_FROM_CKPT:
         if k not in ck_args:
             continue
         new = ck_args[k]
         old = getattr(args, k, None)
-        if new != old:
-            print(f"  [ckpt-sync] {k}: {old!r} -> {new!r}")
-            setattr(args, k, new)
+        if new == old:
+            continue
+        if k in explicit:
+            # A flag given on the command line (e.g. --no_neighbor_attn) takes precedence.
+            print(f"  [ckpt-sync] keeping --{k}={old!r} (checkpoint: {new!r})")
+            continue
+        print(f"  [ckpt-sync] {k}: {old!r} -> {new!r}")
+        setattr(args, k, new)
 
 
 def _load_backbone_from_anomaly_checkpoint(path: str, model: MortalityModel, device: str):
@@ -211,7 +215,7 @@ def main(args: Any) -> None:
     # row per stay tagged by split (train/val/test) — use it to derive the
     # held-out validation slice from the pretrain bundle (= train + val pids).
     labels_path = os.path.join(
-        os.path.dirname(cfg.train_data_path), "eicu_stay_labels.parquet"
+        os.path.dirname(cfg.train_data_path), f"{cfg.name}_stay_labels.parquet"
     )
     stay_labels = pd.read_parquet(labels_path)
     stay_labels["mortality"] = stay_labels["mortality"].astype(np.int64)
@@ -268,6 +272,7 @@ def main(args: Any) -> None:
     poi_index = POIIndex(
         all_stays, args.clique_size,
         overlap_min_frac=getattr(args, "overlap_min_frac", 0.0),
+        neighbor_search=args.neighbor_search,
     )
 
     n_eval_windows = max(1, int(getattr(args, "n_eval_windows", 1)))

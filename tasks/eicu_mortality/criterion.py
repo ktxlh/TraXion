@@ -1,8 +1,7 @@
 """BCE-with-logits loss for mortality fine-tuning.
 
-The ICU demo has ~8.5% positives so we apply a fixed pos_weight to the
-loss (default = inverse class frequency, capped at 10x to avoid blowing
-up the gradient on the rare class).
+Mortality is a minority class, so a fixed pos_weight is applied to the
+positive term (set with --pos_weight; 5.0 in the released scripts).
 """
 
 from __future__ import annotations

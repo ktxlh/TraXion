@@ -1,9 +1,8 @@
-"""Prepare eICU-CRD demo (PhysioNet, open-access) for Clique pre-training.
+"""Prepare PhysioNet eICU-CRD 2.0 for TraXion pre-training and mortality fine-tuning.
 
-Cross-domain target: ICU mortality prediction from clinical event streams.
-
-Mapping to Clique's (agent, poi, time, category) schema:
-  agent      = patientunitstayid (one agent per ICU stay)
+Mapping to TraXion's (agent, poi, time, category) schema:
+  agent      = patientunitstayid (one agent per ICU stay; re-key to the patient
+               with preprocess/rekey_patient.py for pre-training)
   poi_id     = "<table>::<item>" e.g. "lab::glucose", "med::ASPIRIN", ...
   longitude,
   latitude   = 2D UMAP embedding of the (POI x stay) co-occurrence matrix
@@ -12,19 +11,18 @@ Mapping to Clique's (agent, poi, time, category) schema:
   venue_type = the table the event came from (lab / med / treatment / vitalA / infusion)
   act_types  = list[int] encoding of the event-type
   anomaly    = 0 in train (pretraining uses synthetic perturbations); the
-               per-stay mortality label is stored in `mortality` and used by
-               train_eicu.py / evaluate_eicu.py during fine-tuning.
+               per-stay mortality label (hospitaldischargestatus == "Expired") is
+               stored in `<tag>_stay_labels.parquet` and used by train_eicu.py /
+               evaluate_eicu.py during fine-tuning.
 
-Cohort: all 2,520 ICU stays; drop the 28 stays with NaN
-hospitaldischargestatus.
+Cohort: every ICU stay with a known hospitaldischargestatus.
 
-Split: 70/15/15 by uniquepid (patient-level, no leakage), stratified on
-hospital mortality.
+Split: 70/15/15 by uniquepid (patient-level), stratified on hospital mortality.
 
-Output (to OUT_DIR):
-  eicu_train.parquet, eicu_test.parquet, eicu_poi.parquet,
-  eicu_aoi_box.geojson, eicu_dataset_metadata.parquet,
-  eicu_stay_labels.parquet  (extra: per-stay mortality labels for fine-tuning)
+Output (to --out-dir):
+  <tag>_train.parquet, <tag>_test.parquet, <tag>_poi.parquet,
+  <tag>_aoi_box.geojson, <tag>_dataset_metadata.parquet,
+  <tag>_stay_labels.parquet (per-stay mortality labels for fine-tuning)
 """
 
 import argparse
@@ -42,13 +40,13 @@ from shapely.geometry import box
 _DATA_ROOT = os.environ.get("TRAXION_DATA_DIR", "./data")
 EICU_DIR = os.environ.get(
     "EICU_RAW_DIR",
-    os.path.join(_DATA_ROOT, "eicu-collaborative-research-database-demo-2.0.1"),
+    os.path.join(_DATA_ROOT, "physionet.org", "files", "eicu-crd", "2.0"),
 )
-OUT_DIR = os.path.join(_DATA_ROOT, "eicu-demo")
+OUT_DIR = os.path.join(_DATA_ROOT, "eicu-full")
 
 # Synthetic base date so offset minutes -> datetime is well-formed. eICU records
 # events as offsets (in minutes) from unit-admit; there are no real calendar
-# dates in the demo, so any monotonic mapping works.
+# dates, so any monotonic mapping works.
 BASE_DATETIME = pd.Timestamp("2020-01-01 00:00:00")
 
 RNG_SEED = 42
@@ -56,9 +54,7 @@ TRAIN_FRAC = 0.70
 VAL_FRAC = 0.15
 TEST_FRAC = 0.15
 
-# POI vocabulary truncation: keep frequent items, lump the long tail under
-# "<table>::OTHER". Aggressive truncation keeps the vocab tight (~500-600 POIs)
-# which is well-conditioned for a tiny model.
+# POI vocabulary truncation: keep the top-K most frequent items per table.
 TOP_K_PER_TABLE = {
     "lab": 150,        # ~all 147 lab names
     "med": 200,        # top-200 normalized drug names
@@ -76,7 +72,7 @@ def _normalize_drugname(name: str) -> str:
 
     eICU drug names are deeply messy: "WARFARIN SODIUM 5 MG PO TABS" vs
     "warfarin sodium tab", etc. We lowercase, strip dosage/units, keep only
-    the first 1-2 alpha tokens. Enough to merge the worst duplicates.
+    the first 1-2 alpha tokens.
     """
     if not isinstance(name, str):
         return "unknown"
@@ -99,11 +95,22 @@ def _normalize_drugname(name: str) -> str:
 # Per-table event extractors. Each returns a DataFrame with cols:
 #   patientunitstayid, offset_minutes, poi_id, table_name
 # ---------------------------------------------------------------------------
+def _tbl(eicu_dir: str, name: str) -> str:
+    """Resolve an eICU table filename case-insensitively (e.g. infusionDrug.csv.gz)."""
+    exact = os.path.join(eicu_dir, name)
+    if os.path.isfile(exact):
+        return exact
+    for cand in os.listdir(eicu_dir):
+        if cand.lower() == name.lower():
+            return os.path.join(eicu_dir, cand)
+    raise FileNotFoundError(f"{name} not found in {eicu_dir}")
+
+
 def extract_lab_events(eicu_dir: str, top_k: int) -> pd.DataFrame:
     print("=" * 60)
     print("Step 1a: Extracting lab events")
     print("=" * 60)
-    df = pd.read_csv(f"{eicu_dir}/lab.csv.gz", low_memory=False)
+    df = pd.read_csv(_tbl(eicu_dir, "lab.csv.gz"), low_memory=False)
     df = df.dropna(subset=["patientunitstayid", "labresultoffset", "labname"])
     counts = df["labname"].value_counts()
     keep = set(counts.head(top_k).index)
@@ -120,7 +127,7 @@ def extract_lab_events(eicu_dir: str, top_k: int) -> pd.DataFrame:
 
 def extract_med_events(eicu_dir: str, top_k: int) -> pd.DataFrame:
     print("Step 1b: Extracting medication events")
-    df = pd.read_csv(f"{eicu_dir}/medication.csv.gz", low_memory=False)
+    df = pd.read_csv(_tbl(eicu_dir, "medication.csv.gz"), low_memory=False)
     df = df.dropna(subset=["patientunitstayid", "drugstartoffset", "drugname"])
     df = df[df["drugordercancelled"] == "No"]
     df["item"] = df["drugname"].apply(_normalize_drugname)
@@ -139,7 +146,7 @@ def extract_med_events(eicu_dir: str, top_k: int) -> pd.DataFrame:
 
 def extract_treatment_events(eicu_dir: str, top_k: int) -> pd.DataFrame:
     print("Step 1c: Extracting treatment events")
-    df = pd.read_csv(f"{eicu_dir}/treatment.csv.gz", low_memory=False)
+    df = pd.read_csv(_tbl(eicu_dir, "treatment.csv.gz"), low_memory=False)
     df = df.dropna(subset=["patientunitstayid", "treatmentoffset", "treatmentstring"])
     # treatmentstring is hierarchical "level1|level2|level3|...". Use first 2
     # levels (~80 unique) — enough granularity, stable vocab.
@@ -162,7 +169,7 @@ def extract_treatment_events(eicu_dir: str, top_k: int) -> pd.DataFrame:
 
 def extract_infusion_events(eicu_dir: str, top_k: int) -> pd.DataFrame:
     print("Step 1d: Extracting infusiondrug events")
-    df = pd.read_csv(f"{eicu_dir}/infusiondrug.csv.gz", low_memory=False)
+    df = pd.read_csv(_tbl(eicu_dir, "infusiondrug.csv.gz"), low_memory=False)
     df = df.dropna(subset=["patientunitstayid", "infusionoffset", "drugname"])
     # infusion drugnames are cleaner than medication's; keep as-is.
     df["item"] = df["drugname"].astype(str).str.strip()
@@ -187,7 +194,7 @@ def extract_vitalA_events(eicu_dir: str, top_k: int) -> pd.DataFrame:
     form: one event per (row, non-null column).
     """
     print("Step 1e: Extracting vitalAperiodic events (presence only)")
-    df = pd.read_csv(f"{eicu_dir}/vitalAperiodic.csv.gz", low_memory=False)
+    df = pd.read_csv(_tbl(eicu_dir, "vitalAperiodic.csv.gz"), low_memory=False)
     df = df.dropna(subset=["patientunitstayid", "observationoffset"])
     measurement_cols = [
         "noninvasivesystolic", "noninvasivediastolic", "noninvasivemean",
@@ -220,10 +227,10 @@ def load_patient_labels(eicu_dir: str) -> pd.DataFrame:
     print("\n" + "=" * 60)
     print("Step 2: Loading patient table + mortality labels")
     print("=" * 60)
-    p = pd.read_csv(f"{eicu_dir}/patient.csv.gz", low_memory=False)
+    p = pd.read_csv(_tbl(eicu_dir, "patient.csv.gz"), low_memory=False)
     print(f"  raw stays: {len(p):,}")
 
-    # Drop stays with unknown discharge status (28 rows in demo).
+    # Drop stays with unknown discharge status.
     before = len(p)
     p = p[p["hospitaldischargestatus"].isin(["Alive", "Expired"])].copy()
     print(f"  dropped {before - len(p)} stays with unknown discharge status")
@@ -252,8 +259,7 @@ def patient_level_split(patient_df: pd.DataFrame, rng_seed: int):
     """Split by uniquepid so a patient's stays never appear in two splits.
 
     Stratified on mortality at the patient level (positive if any stay
-    expired). For the 1,841 patients in the demo this gives ~155 mortal /
-    1,686 non-mortal patients.
+    expired).
     """
     print("\n" + "=" * 60)
     print(f"Step 3: Patient-level split  ({TRAIN_FRAC:.0%}/{VAL_FRAC:.0%}/{TEST_FRAC:.0%})")
@@ -394,7 +400,7 @@ def assemble_stays(
         print(f"  [warn] {missing:,} events with no UMAP coord (dropping)")
         events = events.dropna(subset=["longitude", "latitude"]).copy()
 
-    # cat_0 (legacy column kept for compatibility with downstream loaders).
+    # cat_0: the category id as a float column (read by the data loaders).
     events["cat_0"] = events["act_types"].apply(
         lambda xs: float(xs[0]) if isinstance(xs, list) and xs else 0.0
     )
@@ -507,7 +513,7 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--eicu-dir", default=EICU_DIR)
     p.add_argument("--out-dir", default=OUT_DIR)
-    p.add_argument("--tag", default="eicu-demo",
+    p.add_argument("--tag", default="eicu-full",
                    help="filename stem for output parquet files (matches config.py)")
     p.add_argument("--seed", type=int, default=RNG_SEED)
     return p.parse_args(argv)

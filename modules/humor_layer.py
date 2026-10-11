@@ -11,6 +11,49 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def _unmask_fully_masked_rows(kpm: torch.Tensor) -> torch.Tensor:
+	"""Unmask slot 0 of any key_padding_mask row whose keys are all masked.
+
+	nn.MultiheadAttention returns NaN for a query whose keys are all masked. Such
+	rows are padding and are discarded downstream, but their NaN would otherwise
+	propagate into valid rows in later attention layers (0 * nan == nan).
+	"""
+	fully_masked = kpm.all(dim=-1)
+	if fully_masked.any():
+		kpm = kpm.clone()
+		kpm[fully_masked, 0] = False
+	return kpm
+
+
+# CUDA caps grid.y/grid.z at 65535; the fused attention kernels launch a grid of
+# batch * num_heads along one of them.
+_MAX_MHA_GRID_BATCH = 65535
+
+
+def _chunked_mha(mha, query, key, value, key_padding_mask=None, attn_mask=None,
+                 need_weights=False):
+	"""Call `mha` over its flattened batch dimension in chunks that fit the CUDA grid.
+
+	Evaluation feeds full, untrimmed trajectories, so the flattened batch
+	(batch * seq_len * features) can exceed the grid limit. Every row attends
+	only within itself, so chunking is exact.
+	"""
+	n = query.shape[0]
+	chunk = max(1, _MAX_MHA_GRID_BATCH // max(mha.num_heads, 1))
+	if n <= chunk:
+		return mha(query, key, value, key_padding_mask=key_padding_mask,
+			attn_mask=attn_mask, need_weights=need_weights)
+	outs, weights = [], []
+	for i in range(0, n, chunk):
+		kpm = key_padding_mask[i:i + chunk] if key_padding_mask is not None else None
+		out, w = mha(query[i:i + chunk], key[i:i + chunk], value[i:i + chunk],
+			key_padding_mask=kpm, attn_mask=attn_mask, need_weights=need_weights)
+		outs.append(out)
+		if need_weights:
+			weights.append(w)
+	return torch.cat(outs, dim=0), (torch.cat(weights, dim=0) if need_weights else None)
+
+
 class AxisTransformerEncoderLayer(nn.Module):
 	"""Transformer encoder layer applied along a chosen axis of an N-D tensor."""
 
@@ -80,18 +123,18 @@ class AxisTransformerEncoderLayer(nn.Module):
 		flat = moved.reshape(-1, seq_len, d_model)
 
 		if key_padding_mask is not None:
-			kpm = key_padding_mask.reshape(-1, seq_len)
+			kpm = _unmask_fully_masked_rows(key_padding_mask.reshape(-1, seq_len))
 		else:
 			kpm = None
 
-		out, attn_weights = self.self_attn(
+		out, attn_weights = _chunked_mha(
+			self.self_attn,
 			flat,
 			flat,
 			flat,
 			attn_mask=attn_mask,
 			key_padding_mask=kpm,
 			need_weights=need_weights,
-			is_causal=False,
 		)
 		out = out.reshape(*lead_shape, seq_len, d_model)
 		out = out.movedim(-2, axis)
@@ -181,14 +224,15 @@ class HumorLayer(nn.Module):
             .expand(batch_size, seq_len, num_feats, clique_size)
             .reshape(-1, clique_size)
         )
-        attn_out = self.neighbor_attn(
+        neighbor_kpm = _unmask_fully_masked_rows(neighbor_kpm)
+        attn_out, _ = _chunked_mha(
+            self.neighbor_attn,
             query=x_agent,
             key=x_neighbors,
             value=x_neighbors,
             key_padding_mask=neighbor_kpm,
             need_weights=False,
-            is_causal=False,
-        )[0]
+        )
         x_agent = self.neighbor_norm1(x_agent + self.neighbor_dropout1(attn_out))
         ff = self.neighbor_linear2(
             self.neighbor_dropout(F.relu(self.neighbor_linear1(x_agent)))

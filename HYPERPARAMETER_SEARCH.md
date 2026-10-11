@@ -15,8 +15,9 @@ For each `(method, dataset, task)` cell:
 2. **Iterate**. Run successive small batches of configurations (typically 4–8
    runs each) that vary one or two hyperparameters at a time. Each batch is
    scored by the same validation criterion used for early stopping:
-   - BCE validation loss for anomaly and ICU-mortality fine-tunes,
-   - total fine-tune loss for next-POI / next-visit / social-link,
+   - BCE validation loss for anomaly fine-tunes,
+   - total fine-tune loss for next-POI / next-visit,
+   - validation AUC for social-link, validation AUROC for ICU mortality,
    - EMA-smoothed total validation loss for pre-training.
 
 3. **Choose** the next batch's settings from the run-by-run trajectory of the
@@ -44,8 +45,8 @@ For each `(method, dataset, task)` cell:
 ## Agent-orchestrated variant
 
 The selection loop is orchestrated by an LLM coding agent
-([Anthropic Claude Code](https://www.anthropic.com/claude-code), in the spirit of
-[Karpathy 2025](https://x.com/karpathy/status/1947667575656698076)): the agent
+([Claude Code](https://www.anthropic.com/claude-code), in the spirit of
+[autoresearch](https://github.com/karpathy/autoresearch)): the agent
 reads the prior batch's logs and validation curves, proposes the next batch's
 hyperparameter settings under the criteria above, and launches the runs via
 the same training scripts a human would use. This replaces the bookkeeping of
@@ -54,19 +55,18 @@ change the search space, the validation criterion, or the protocol's
 outcome — every reported number comes from the unmodified training and
 evaluation code in this repository.
 
-The agent operates under the following standing instructions, used identically
-for TraXion and every retuned baseline:
+The agent operates under the following standing prompt, used identically for
+TraXion and every retuned baseline (verbatim):
 
-> 1. Tune hyperparameters with the validation set.
-> 2. Try altering something from the default; document the change and its
->    effect (you may try a set of changes concurrently); and make an informed
->    decision about what to try next, *instead of random or grid search*.
-> 3. After tuning, train and test the model.
-> 4. Report results and log the best hyperparameters and results to (i) the
->    root of the code repo and (ii) the run record (including the W&B run id
->    where applicable).
->
-> **Notes.** Short sessions tend to favor higher learning rates, which may not
-> be a long-term win — take that into consideration when choosing the learning
-> rate. You may change anything reasonable, such as `model_dim`, `num_layers`,
-> and so on.
+````markdown
+# What I mean by "tuning hyperparameters"
+1. Tune hyperparameters with validation set.
+2. Try alter something from default, document the change and its effect (you may try a set of changes concurrently), and make informed decision of what's best to try next, *instead of random or grid search.* 
+3. After you are done with hyperparameter tuning, train and test the model. 
+4. Report results to me and log the best hyperparameters and results to (1) the root of the code repo and (2) your memory.
+   - If there were wandb runs involved, note down the wandb ID along with with the hyperparameters and results.
+
+Notes: 
+- Short sessions generally prefer higher lr, which may not be long-term win. Take that into consdieration when you decide lr.
+- You may change anything reasonable, such as `model_dim`, `num_layers`, and more.
+````

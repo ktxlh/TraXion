@@ -15,8 +15,9 @@ Per-dataset paths follow the convention produced by ``preprocess/prepare_*.py``:
     <data_root>/<dataset>/<dataset>_aoi_box.geojson
     <data_root>/<dataset>/<dataset>_dataset_metadata.parquet
 
-The eight dataset entries below correspond one-to-one with the eight cohorts
-reported in the paper (Table~1 / Appendix~B).
+The entries below cover the nine datasets in the paper. The two EHR corpora have
+two entries each: ``*-pid`` (events keyed by patient) for pre-training, and the
+stay-keyed corpus for mortality fine-tuning and evaluation.
 """
 
 from __future__ import annotations
@@ -59,9 +60,14 @@ DATASET_PATHS = {
     "gowalla-stockholm-v1": _layout("gowalla-stockholm-v1", n_agents=7_759),
     "gowalla-austin-v1":    _layout("gowalla-austin-v1",    n_agents=5_397),
 
-    # Non-mobility MESES instances
+    # Enterprise authentication logs
     "lanl-core":  _layout("lanl-core",  n_agents=1_598),
-    "eicu-demo":  _layout("eicu-demo",  n_agents=2_492),
+
+    # Electronic health records (PhysioNet eICU-CRD 2.0 and MIMIC-IV 3.1)
+    "eicu-full":        _layout("eicu-full",        n_agents=199_108),
+    "eicu-full-pid":    _layout("eicu-full-pid",    n_agents=138_176),
+    "mimiciv-full":     _layout("mimiciv-full",     n_agents=94_458),
+    "mimiciv-full-pid": _layout("mimiciv-full-pid", n_agents=65_360),
 }
 
 SUPPORTED_DATASETS = tuple(sorted(DATASET_PATHS.keys()))

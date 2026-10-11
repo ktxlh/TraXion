@@ -38,7 +38,7 @@ from tasks.social.pair_features import PairFeatureComputer
 from utils.argparse import parse_social_args
 from utils.file_io import load_dataset_metadata, load_pois, load_stays
 from utils.info import print_parameter_distribution
-from utils.misc import split_train_to_train_val
+from utils.misc import cli_explicit_keys, split_train_to_train_val
 from utils.training_data import (
     ensure_category_columns,
     normalize_and_validate_agents,
@@ -257,13 +257,20 @@ def _sync_arch_from_checkpoint(args) -> None:
         return
     ck = torch.load(args.resume_from_checkpoint, map_location="cpu", weights_only=False)
     ck_args = ck.get("args", {})
+    explicit = cli_explicit_keys()
     for k in _ARCH_KEYS_FROM_CKPT:
         if k not in ck_args:
             continue
-        new = ck_args[k]; old = getattr(args, k, None)
-        if new != old:
-            print(f"  [ckpt-sync] {k}: {old!r} -> {new!r}")
-            setattr(args, k, new)
+        new = ck_args[k]
+        old = getattr(args, k, None)
+        if new == old:
+            continue
+        if k in explicit:
+            # A flag given on the command line (e.g. --no_neighbor_attn) takes precedence.
+            print(f"  [ckpt-sync] keeping --{k}={old!r} (checkpoint: {new!r})")
+            continue
+        print(f"  [ckpt-sync] {k}: {old!r} -> {new!r}")
+        setattr(args, k, new)
 
 
 def main(args: Any) -> None:

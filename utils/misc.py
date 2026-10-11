@@ -1,3 +1,4 @@
+import sys
 from typing import Dict, List, Tuple
 
 import geopandas as gpd
@@ -210,3 +211,14 @@ def split_train_to_train_val(train_df, val_ratio=0.2, random_seed=42, from_tail=
         val_stays = train_df[train_df["start"] < cutoff_time].reset_index(drop=True)
     return train_stays, val_stays
     
+
+def cli_explicit_keys() -> set:
+    """Argument names given explicitly on the command line (both --x and --no_x forms)."""
+    explicit = set()
+    for tok in sys.argv[1:]:
+        if not tok.startswith("--"):
+            continue
+        name = tok[2:].split("=", 1)[0].replace("-", "_")
+        explicit.add(name)
+        explicit.add(name[3:] if name.startswith("no_") else "no_" + name)
+    return explicit

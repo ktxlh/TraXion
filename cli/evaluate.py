@@ -106,7 +106,7 @@ def evaluate(
 
 def _parse_eval_args():
     parser = argparse.ArgumentParser(
-        description="Evaluate a trained Clique checkpoint on the NUMOSIM test set"
+        description="Evaluate a fine-tuned TraXion anomaly-detection checkpoint on the test set"
     )
     parser.add_argument(
         "--run_id",
@@ -124,7 +124,7 @@ def _parse_eval_args():
         "--batch_size",
         type=int,
         default=None,
-        help="Batch size for evaluation (defaults to val_batch_size saved in checkpoint)",
+        help="Batch size for evaluation (default: 32)",
     )
     parser.add_argument(
         "--num_workers",
@@ -221,7 +221,7 @@ def main() -> None:
     from modules.model import Model
     from utils.dataset import CliqueDataset, collate_fn
     from utils.file_io import load_dataset_metadata, load_pois, load_stays
-    from utils.training_data import ensure_category_columns, prepare_stays
+    from utils.training_data import ensure_category_columns, prepare_stays, training_agent_index
 
     # Infer dataset from checkpoint args; fall back to W&B run config for
     # checkpoints saved before the dataset key was included.
@@ -248,11 +248,11 @@ def main() -> None:
     test_stays = prepare_stays(load_stays("test", dataset_cfg), min_time=min_time)
     test_stays = ensure_category_columns(test_stays, categories)
 
-    # Re-build the agent→index mapping from training data so that agent
+    # Re-build the agent→index mapping exactly as training built it, so that agent
     # embeddings refer to the same entries as during training.
     print("Loading training data to rebuild agent mapping ...")
     train_stays_raw = prepare_stays(load_stays("train", dataset_cfg), min_time=min_time)
-    unique_agents = pd.Index(train_stays_raw["agent"].unique())
+    unique_agents = training_agent_index(train_stays_raw)
     agent_to_idx = pd.Series(
         np.arange(len(unique_agents), dtype=np.int64), index=unique_agents
     )
@@ -273,11 +273,9 @@ def main() -> None:
         overlap_min_frac=getattr(args, "overlap_min_frac", 0.0),
     )
 
-    # Determine batch size: CLI flag > checkpoint val_batch_size > safe default
-    batch_size = eval_args.batch_size
-    if batch_size is None:
-        batch_size = getattr(args, "val_batch_size", None) or 256
-        print(f"Using batch size: {batch_size} (from checkpoint val_batch_size)")
+    # Evaluation scores full, untrimmed trajectories, so it uses a smaller batch than training.
+    batch_size = eval_args.batch_size or 32
+    print(f"Using batch size: {batch_size}")
 
     test_loader = DataLoader(
         test_data,

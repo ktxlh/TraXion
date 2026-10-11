@@ -106,13 +106,18 @@ def _train_epoch(loader, model, optimizer, criterion, logger, pbar, device,
 
         try:
             optimizer.zero_grad()
-            poi_logits, time_logits, cat_logits = model(
+            h = model.encode(
                 batch["location"], batch["start"], batch["stop"],
                 batch["category"], batch["agent"],
                 batch["padding_mask"], batch["neighbor_padding_mask"],
                 mask_positions=mp, causal=causal,
             )
-            loss, loss_dict = criterion((poi_logits, time_logits, cat_logits), batch)
+            poi_logits, time_logits, cat_logits = model.predict(h)
+            visit_emb = model.visit_embeddings(h) if model.keep_prototype else None
+            own_agent_emb = model._own_agent_emb if model.keep_prototype else None
+            loss, loss_dict = criterion(
+                (poi_logits, time_logits, cat_logits), batch,
+                visit_emb=visit_emb, own_agent_emb=own_agent_emb)
             if loss_dict["n_score"] > 0:
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
@@ -150,13 +155,18 @@ def _validate_epoch(loader, model, criterion, logger, device,
                 batch["mask_positions"] = mp
             else:
                 mp = None
-            poi_logits, time_logits, cat_logits = model(
+            h = model.encode(
                 batch["location"], batch["start"], batch["stop"],
                 batch["category"], batch["agent"],
                 batch["padding_mask"], batch["neighbor_padding_mask"],
                 mask_positions=mp, causal=causal,
             )
-            loss, loss_dict = criterion((poi_logits, time_logits, cat_logits), batch)
+            poi_logits, time_logits, cat_logits = model.predict(h)
+            visit_emb = model.visit_embeddings(h) if model.keep_prototype else None
+            own_agent_emb = model._own_agent_emb if model.keep_prototype else None
+            loss, loss_dict = criterion(
+                (poi_logits, time_logits, cat_logits), batch,
+                visit_emb=visit_emb, own_agent_emb=own_agent_emb)
             losses.append(float(loss.item()))
             dicts.append(loss_dict)
     agg_loss = float(np.mean(losses)) if losses else float("inf")
@@ -245,6 +255,7 @@ def main(args: Any) -> None:
         poi_weight=float(args.poi_loss_weight),
         time_weight=float(args.time_loss_weight),
         cat_weight=float(args.cat_loss_weight),
+        contrastive_weight=0.5 if args.keep_prototype else 0.0,
     )
 
     if args.optimizer == "adamw":

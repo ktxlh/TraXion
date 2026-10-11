@@ -1,12 +1,7 @@
-"""1-hop graph refinement of per-agent embeddings (used at fine-tune time only).
+"""Optional 1-hop graph refinement of per-agent embeddings (fine-tune only; off by default).
 
-Why: pure trajectory backbones cannot recover the train friend graph from
-visits alone. Graph-aware baselines (LBSN2Vec, H^3GNN, USRC) consume the train
-graph natively. To put TraXion (and any sequence-pretrain backbone, e.g.
-UniTraj) on the same access regime *without* late-fusing a separate LR head
-on handcrafted features, we attach a 1-hop refinement that aggregates each
-agent's train-graph neighbors' embeddings and gates the result back into the
-agent's own embedding.
+Aggregates each agent's train-graph neighbors' embeddings and gates the result
+back into the agent's own embedding (enable with --gnn_head).
 
 The neighbor pool is fixed (train edges only -> no leakage into val/test). The
 neighbor embeddings are read from a frozen *cache* that is refreshed at the

@@ -1,4 +1,4 @@
-"""Command-line argument parsing for Clique.
+"""Command-line argument parsing for TraXion.
 
 Shared arguments are defined in _add_shared_args.  Task-specific parsers
 (parse_args for anomaly detection, parse_poi_args for next-POI recommendation)
@@ -91,6 +91,11 @@ def _add_shared_args(parser: argparse.ArgumentParser) -> None:
 
     # Data parameters
     parser.add_argument("--num_workers", type=int, default=8, help="Number of workers")
+    parser.add_argument(
+        "--neighbor_search", choices=["scan", "sorted"], default="scan",
+        help="Co-occurrence neighbor search. 'scan' ranks every same-context candidate; "
+             "'sorted' returns the same top-k from a start-time-sorted index and is much "
+             "faster when contexts are shared by many events (used for eICU-CRD and MIMIC-IV).")
     parser.add_argument("--pin_memory", action="store_true", help="DataLoader pin_memory=True (faster H2D copies)")
     parser.add_argument("--persistent_workers", action="store_true", help="Keep DataLoader workers alive between epochs")
     parser.add_argument("--prefetch_factor", type=int, default=None, help="DataLoader prefetch_factor (samples prefetched per worker); None = torch default")
@@ -385,15 +390,6 @@ def parse_args(args_list=None):
         default=0.5,
         help="Weight for the contrastive loss term (default: 0.5)",
     )
-    parser.add_argument(
-        "--legacy_perturb_timestamps",
-        action="store_true",
-        help=(
-            "Use the pre-5549b53 timestamp perturbation: randomly resample start/stop for "
-            "each anomalous stay independently, without adjusting or flagging adjacent stays. "
-            "Default (False) uses the current behavior that preserves travel-gap continuity."
-        ),
-    )
 
     if args_list is not None:
         args = parser.parse_args(args_list)
@@ -417,7 +413,7 @@ def parse_poi_args(args_list=None):
         Namespace: Parsed arguments with all configuration parameters
     """
     parser = argparse.ArgumentParser(
-        description="Clique: Next POI Recommendation"
+        description="TraXion: Next POI Recommendation"
     )
     _add_shared_args(parser)
 
@@ -515,7 +511,7 @@ def parse_next_visit_args(args_list=None):
     Adds GMM/time-loss arguments on top of the same args used for POI rec.
     """
     parser = argparse.ArgumentParser(
-        description="Clique: Next-Visit (POI + check-in time) Prediction"
+        description="TraXion: Next-Visit (POI + check-in time) Prediction"
     )
     _add_shared_args(parser)
 
@@ -638,132 +634,9 @@ def parse_next_visit_args(args_list=None):
     return parser.parse_args()
 
 
-def parse_tul_args(args_list=None):
-    """Parse command line arguments for Trajectory User Linking training."""
-    parser = argparse.ArgumentParser(description="Clique: Trajectory User Linking")
-    _add_shared_args(parser)
-
-    parser.add_argument(
-        "--sub_traj_len", type=int, default=32,
-        help="Number of visits per sub-trajectory chunk (default: 32).",
-    )
-    parser.add_argument(
-        "--min_chunks", type=int, default=3,
-        help="Agents with fewer than this many full chunks are excluded (default: 3).",
-    )
-    parser.add_argument(
-        "--train_frac", type=float, default=0.7,
-        help="Per-agent fraction of chunks routed to train (default: 0.7).",
-    )
-    parser.add_argument(
-        "--val_frac", type=float, default=0.1,
-        help="Per-agent fraction of chunks routed to val (default: 0.1).",
-    )
-    parser.add_argument(
-        "--chunk_split_seed", type=int, default=42,
-        help="Seed for the per-agent chunk split (default: 42).",
-    )
-    parser.add_argument(
-        "--tul_emb_dim", type=int, default=256,
-        help="Pooled chunk-embedding dim before the classifier (default: 256).",
-    )
-    parser.add_argument(
-        "--tul_head_dropout", type=float, default=0.1,
-        help="Dropout inside the TUL pooling MLP (default: 0.1).",
-    )
-    parser.add_argument(
-        "--label_smoothing", type=float, default=0.0,
-        help="Cross-entropy label smoothing (default: 0.0).",
-    )
-    parser.add_argument(
-        "--wandb_project", type=str, default="traxion-tul",
-        help="W&B project name for TUL runs (default: traxion-tul).",
-    )
-    parser.add_argument(
-        "--freeze_backbone", action="store_true",
-        help="Freeze backbone (feature_encoder + attentions) and only train the TUL head.",
-    )
-    parser.add_argument(
-        "--freeze_agent_emb", action="store_true",
-        help=(
-            "Freeze the input agent embedding weights. Combined with the dataset-level "
-            "agent zeroing this guarantees the backbone sees no agent-identity signal "
-            "through the feature encoder during fine-tuning."
-        ),
-    )
-
-    # --- SupCon / contrastive fine-tuning ------------------------------------
-    parser.add_argument(
-        "--supcon_weight", type=float, default=0.0,
-        help=(
-            "Weight for supervised contrastive loss (Khosla et al. 2020) applied "
-            "to the ℓ2-normalized projection-head output. 0.0 (default) disables it "
-            "and reproduces the pure CE baseline."
-        ),
-    )
-    parser.add_argument(
-        "--supcon_temperature", type=float, default=0.1,
-        help="Temperature for the supervised contrastive loss (default: 0.1).",
-    )
-    parser.add_argument(
-        "--tul_proj_dim", type=int, default=128,
-        help="Dimensionality of the contrastive projection head (default: 128).",
-    )
-    parser.add_argument(
-        "--tul_mask_ratio", type=float, default=0.15,
-        help=(
-            "Fraction of valid visits randomly masked per augmented view when "
-            "supcon_weight>0 (default: 0.15). Applied by flipping padding_mask bits."
-        ),
-    )
-    parser.add_argument(
-        "--tul_head_lr_mult", type=float, default=1.0,
-        help=(
-            "LR multiplier applied to the TUL head (pool_proj + classifier + "
-            "proj_head). >1.0 lets the randomly-initialized head catch up to a "
-            "pretrained backbone. Default 1.0 reproduces single-group optimizer."
-        ),
-    )
-    parser.add_argument(
-        "--warmup_steps", type=int, default=0,
-        help="Linear LR warmup steps before cosine decay (default: 0 disables).",
-    )
-    parser.add_argument(
-        "--tul_cosine_classifier", action="store_true",
-        help=(
-            "Use a cosine-similarity classifier head (normalize both emb and "
-            "classifier weight, scale by tul_cosine_scale). Standard trick for "
-            "fine-grained identity classification."
-        ),
-    )
-    parser.add_argument(
-        "--tul_cosine_scale", type=float, default=20.0,
-        help="Scale for cosine-similarity logits when tul_cosine_classifier is set (default 20).",
-    )
-    parser.add_argument(
-        "--pk_P", type=int, default=0,
-        help=(
-            "SupCon PK-sampler: classes per batch (P). 0 disables PK and falls "
-            "back to uniform shuffling."
-        ),
-    )
-    parser.add_argument(
-        "--pk_K", type=int, default=0,
-        help="SupCon PK-sampler: chunks per class per batch (K). Batch = P*K.",
-    )
-    parser.add_argument(
-        "--pk_batches_per_epoch", type=int, default=0,
-        help="Override batches/epoch under PK sampler (0 = n_train / (P*K)).",
-    )
-
-    if args_list is not None:
-        return parser.parse_args(args_list)
-    return parser.parse_args()
-
-
 def parse_eicu_args(args_list=None):
     """Parse command line arguments for eICU mortality fine-tuning."""
-    parser = argparse.ArgumentParser(description="Clique: ICU Mortality Prediction (eICU demo)")
+    parser = argparse.ArgumentParser(description="TraXion: ICU Mortality Prediction")
     _add_shared_args(parser)
 
     parser.add_argument("--eicu_emb_dim", type=int, default=128,
@@ -807,7 +680,7 @@ def parse_eicu_args(args_list=None):
 
 def parse_social_args(args_list=None):
     """Parse command line arguments for social relationship inference training."""
-    parser = argparse.ArgumentParser(description="Clique: Social Link Prediction")
+    parser = argparse.ArgumentParser(description="TraXion: Social Link Prediction")
     _add_shared_args(parser)
 
     parser.add_argument("--social_emb_dim", type=int, default=128,
@@ -869,8 +742,16 @@ def parse_ablation_args(args_list=None):
     objective selector and STM mask ratio. The resulting checkpoint is
     loadable by the standard finetune scripts via strict=False.
     """
-    parser = argparse.ArgumentParser(description="Clique: Ablation Pretraining (causal / STM)")
+    parser = argparse.ArgumentParser(description="TraXion: Ablation Pretraining (causal / STM)")
     _add_shared_args(parser)
+
+    parser.add_argument(
+        "--keep_prototype",
+        action="store_true",
+        help="Add the entity-prototype InfoNCE term (weight 0.5, as in cli/train.py) to "
+             "ablation pre-training, so the arm differs from the full recipe only in the "
+             "primary objective.",
+    )
 
     parser.add_argument(
         "--pretrain_objective",

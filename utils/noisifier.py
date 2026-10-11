@@ -983,7 +983,6 @@ class Noisifier:
         perturb_locations: bool = True,
         perturb_timestamps: bool = True,
         behavioral_anomaly: bool = False,
-        legacy_perturb_timestamps: bool = False,
         replace_agent: bool = False,
         all_agent_stays: pd.DataFrame | None = None,
         insert_covisits: bool = False,
@@ -1027,7 +1026,6 @@ class Noisifier:
         self.insert_visits = insert_visits
         self.perturb_locations = perturb_locations
         self.perturb_timestamps = perturb_timestamps
-        self.legacy_perturb_timestamps = legacy_perturb_timestamps
         self.pois = pois
         self.categories = categories
         self.timestamp_step_size = float(timestamp_step_size)
@@ -1280,8 +1278,7 @@ class Noisifier:
             if self.perturb_locations and loc_mask.any():
                 stays_copy = perturb_locations(stays_copy, loc_mask, self.categories, self._aoi, self.nearest_poi)
             if self.perturb_timestamps and time_mask.any():
-                _pt_fn = perturb_timestamps_legacy if self.legacy_perturb_timestamps else perturb_timestamps
-                stays_copy = _pt_fn(
+                stays_copy = perturb_timestamps(
                     stays_copy,
                     time_mask,
                     timestamp_step_size=self.timestamp_step_size,
@@ -1313,34 +1310,6 @@ def perturb_locations(stay_df, anomalous_mask, categories, aoi, nearest_poi_fn):
         stay_df.at[idx, "poi_id"] = nearest["poi_id"]
         for cat in categories:
             stay_df.at[idx, cat] = nearest.get(cat, 0)
-
-    return stay_df
-
-
-def perturb_timestamps_legacy(stay_df, anomalous_mask, timestamp_step_size):
-    """Legacy (pre-5549b53) timestamp perturbation.
-
-    Randomly resamples start and stop for each anomalous stay independently,
-    without preserving travel-gap continuity and without adjusting or flagging
-    adjacent stays.  Kept for ablation comparison against the current
-    travel-gap-preserving version.
-    """
-    n_anomalous = anomalous_mask.sum()
-    step_size = float(timestamp_step_size)
-
-    min_start_steps = int(stay_df["start"].min() / step_size)
-    max_start_steps = int(stay_df["start"].max() / step_size)
-    starts_steps = np.random.randint(min_start_steps, max_start_steps + 1, n_anomalous)
-    starts = starts_steps * step_size
-    stay_df.loc[anomalous_mask, "start"] = starts
-
-    min_duration_hours = 5 / 60
-    max_duration_hours = 6
-    min_duration_steps = int(min_duration_hours / step_size)
-    max_duration_steps = int(max_duration_hours / step_size)
-    durations_steps = np.random.randint(min_duration_steps, max_duration_steps + 1, n_anomalous)
-    durations = durations_steps * step_size
-    stay_df.loc[anomalous_mask, "stop"] = starts + durations
 
     return stay_df
 

@@ -2,19 +2,22 @@
 # Fine-tune the pre-trained TraXion backbone for next-POI recommendation.
 #
 # Usage:
-#   bash scripts/finetune_poi.sh <dataset> <pretrain_ckpt> [variant] [extra args ...]
-#   variant ∈ {active (TraXion), bypass (TraXion-NoColoc, default for POI)}
+#   bash scripts/finetune_poi.sh <dataset> <pretrain_ckpt> [route] [extra args ...]
+#
+#   route ∈ {active, bypass} (default: active). bypass skips the pre-trained
+#   co-occurrence sub-layer (--no_neighbor_attn). Run both routes for each seed
+#   and keep the one selected by scripts/select_route.py.
 set -euo pipefail
 
 if [[ $# -lt 2 ]]; then
-    echo "usage: $0 <dataset> <pretrain_ckpt> [variant=active|bypass] [extra args ...]" >&2
+    echo "usage: $0 <dataset> <pretrain_ckpt> [route=active|bypass] [extra args ...]" >&2
     exit 1
 fi
 
 DATASET="$1"; CKPT="$2"; shift 2
-VARIANT="bypass"
+ROUTE="active"
 if [[ $# -ge 1 && ( "$1" == "active" || "$1" == "bypass" ) ]]; then
-    VARIANT="$1"; shift
+    ROUTE="$1"; shift
 fi
 
 COMMON=(
@@ -26,7 +29,7 @@ COMMON=(
     --time_modulo daily --lambda_min 1e-3 --lambda_max 360
 )
 
-[[ "$VARIANT" == "bypass" ]] && COMMON+=(--no_neighbor_attn)
+[[ "$ROUTE" == "bypass" ]] && COMMON+=(--no_neighbor_attn)
 
 case "$DATASET" in
     foursquare-tokyo)

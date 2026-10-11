@@ -1,6 +1,7 @@
 """Handcrafted-feature logistic-regression baseline for social link prediction.
 
-Reports AUC / AP / Hits@10 / MRR per dataset. Learned model must beat these.
+Reports AUC / AP / Hits@10 / MRR per dataset. The same logistic regression is
+late-fused with TraXion in tasks/social/ensemble_eval.py.
 
 Usage::
 

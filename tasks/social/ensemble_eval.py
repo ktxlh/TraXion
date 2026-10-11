@@ -1,14 +1,18 @@
-"""Evaluate an ensemble of (trained social model) + (handcrafted LR baseline).
+"""Social-link evaluation with late fusion of TraXion and a handcrafted-feature LR.
 
-Diagnostic: measures how much of the baseline-gap comes from the pair_head
-dropping the handcrafted signal vs. the embedding being uninformative.
-
-For each alpha in [0, 1]:
+For each alpha in {0, 0.1, ..., 1}:
     prob = alpha * sigmoid(LR_logit) + (1-alpha) * sigmoid(model_logit)
 
-Model and LR scores are precomputed once per eval pair, then recombined per
-alpha (cheap). Negatives for ranking are sampled once with a fixed seed so
-Hits@10/MRR are directly comparable across alphas.
+alpha is selected on validation AUC, and the test metrics at that alpha are
+reported (the "TEST:" line). Model and LR scores are computed once per pair and
+recombined per alpha. Negatives for ranking are sampled once with a fixed seed.
+The evaluation is seeded and uses deterministic kernels, so it returns the same
+numbers on every run.
+
+Example::
+
+    python -m tasks.social.ensemble_eval --dataset foursquare-tokyo \
+        --social_checkpoint runs/social_<id>.pt
 """
 
 from __future__ import annotations
@@ -256,12 +260,22 @@ def run(args):
     print(f"AUC & AP & Hits@10 & MRR:  {ta:.4f} & {tap:.4f} & {trnk['hits_at_10']:.4f} & {trnk['mrr']:.4f}")
 
 
+def _set_deterministic(seed: int) -> None:
+    _os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    torch.manual_seed(seed)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset", required=True)
     ap.add_argument("--social_checkpoint", required=True)
     ap.add_argument("--device", default="cuda:0")
+    ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
+    _set_deterministic(args.seed)
     run(args)
 
 

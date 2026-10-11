@@ -45,6 +45,7 @@ def main(args) -> None:
         raise ValueError("--resume_from_checkpoint is required for evaluate_social.py")
 
     cfg = get_dataset_config(args.dataset)
+    args.training_log_dir = cfg.training_log_dir
     metadata = load_dataset_metadata(cfg)
     _, categories = load_pois(cfg)
 

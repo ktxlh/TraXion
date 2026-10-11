@@ -6,7 +6,9 @@
 # Example:
 #   bash scripts/pretrain.sh urban-berlin --device cuda:0 --seed 0
 #
-# Per-dataset settings follow Appendix Table 5 of the paper.
+# Per-dataset settings follow the per-dataset pre-training table in Appendix B.
+# The two EHR corpora are pre-trained on their patient-keyed versions
+# (eicu-full-pid, mimiciv-full-pid; see preprocess/rekey_patient.py).
 set -euo pipefail
 
 if [[ $# -lt 1 ]]; then
@@ -19,7 +21,6 @@ DATASET="$1"; shift
 COMMON=(
     --dataset "$DATASET"
     --lr 2e-4
-    --weight_decay 1e-3
     --perturb_locations --perturb_timestamps
     --no-insert_visits --no-behavioral_anomaly
     --early_stopping_criterion total_loss --ema_early_stopping
@@ -28,40 +29,57 @@ COMMON=(
 case "$DATASET" in
     numosim)
         EXTRA=(--time_modulo weekly --clique_size 8
-               --num_epochs 200 --early_stopping_patience 20)
+               --weight_decay 1e-3
+               --num_epochs 200 --early_stopping_patience 20
+               --train_batch_size 64 --val_batch_size 512)
         ;;
     urban-atlanta)
         EXTRA=(--time_modulo daily --clique_size 8
-               --num_epochs 200 --early_stopping_patience 40)
+               --weight_decay 1e-3
+               --num_epochs 200 --early_stopping_patience 40
+               --train_batch_size 64 --val_batch_size 512)
         ;;
     urban-berlin)
         EXTRA=(--time_modulo daily --clique_size 4
-               --num_epochs 1000 --early_stopping_patience 100)
+               --weight_decay 1e-2 --no-perturb_locations
+               --num_epochs 800 --early_stopping_patience 80
+               --train_batch_size 64 --val_batch_size 256)
         ;;
     foursquare-tokyo)
         EXTRA=(--time_modulo daily --clique_size 8
                --lambda_min 1e-3 --lambda_max 360
-               --num_epochs 200 --early_stopping_patience 40)
+               --weight_decay 1e-2
+               --num_epochs 400 --early_stopping_patience 40
+               --train_batch_size 128 --val_batch_size 256)
         ;;
     gowalla-stockholm-v1)
         EXTRA=(--time_modulo daily --clique_size 4
                --lambda_min 1e-3 --lambda_max 360
-               --num_epochs 200 --early_stopping_patience 80)
+               --weight_decay 1e-2
+               --num_epochs 500 --early_stopping_patience 80
+               --train_batch_size 64 --val_batch_size 512)
         ;;
     gowalla-austin-v1)
         EXTRA=(--time_modulo daily --clique_size 4
                --lambda_min 1e-3 --lambda_max 360
-               --num_epochs 500 --early_stopping_patience 80)
+               --weight_decay 1e-2 --no-perturb_timestamps
+               --num_epochs 500 --early_stopping_patience 80
+               --train_batch_size 64 --val_batch_size 256)
         ;;
     lanl-core)
         EXTRA=(--time_modulo daily --clique_size 8
                --lambda_min 1e-3 --lambda_max 2
-               --num_epochs 200 --early_stopping_patience 40)
+               --weight_decay 1e-2
+               --num_epochs 200 --early_stopping_patience 40
+               --train_batch_size 64 --val_batch_size 64)
         ;;
-    eicu-demo)
-        EXTRA=(--time_modulo daily --clique_size 4 --no_agent_emb
-               --model_dim 128 --num_layers 2 --n_heads 4 --max_seq_len 32
-               --num_epochs 200 --early_stopping_patience 40)
+    eicu-full-pid|mimiciv-full-pid)
+        EXTRA=(--time_modulo daily --clique_size 4
+               --weight_decay 1e-3
+               --model_dim 128 --num_layers 2 --n_heads 4 --max_seq_len 32 --no_agent_emb
+               --neighbor_search sorted
+               --num_epochs 80 --early_stopping_patience 15
+               --train_batch_size 32 --val_batch_size 64)
         ;;
     *)
         echo "unsupported dataset: $DATASET" >&2; exit 2 ;;

@@ -1,7 +1,7 @@
 # Data preparation scripts
 
-Each script reads a public-dataset raw release and writes parquet files in the
-canonical layout that `config.py` expects:
+Each script reads a dataset's original release and writes parquet files in the
+layout that `config.py` expects:
 
 ```
 $TRAXION_DATA_DIR/<dataset>/<dataset>_train.parquet
@@ -11,40 +11,16 @@ $TRAXION_DATA_DIR/<dataset>/<dataset>_aoi_box.geojson
 $TRAXION_DATA_DIR/<dataset>/<dataset>_dataset_metadata.parquet
 ```
 
-## NUMOSIM-LA / Urban Anomalies
+| Script | Datasets |
+|---|---|
+| `prepare_numosim.py` | NUMOSIM-LA (`numosim`) |
+| `preprocess.py` | Urban Anomalies-Berlin / -Atlanta (`urban-berlin`, `urban-atlanta`) |
+| `prepare_city_subsets.py` | Foursquare-Tokyo, Gowalla-Stockholm, Gowalla-Austin |
+| `assign_gowalla_categories.py` | OpenStreetMap POI categories for the two Gowalla subsets |
+| `prepare_social_splits.py` | social-link edge splits for the three city subsets |
+| `prepare_lanl.py` | LANL authentication log (`lanl-core`); host coordinates in `assets/` |
+| `prepare_eicu.py` | eICU-CRD 2.0 (`eicu-full`) |
+| `prepare_mimiciv.py` | MIMIC-IV 3.1 (`mimiciv-full`) |
+| `rekey_patient.py` | patient-keyed pre-training copies (`eicu-full-pid`, `mimiciv-full-pid`) |
 
-Place the OSF-released parquet files for each dataset at the canonical layout
-above. The OSF release already ships in this schema; no preparation script is
-required.
-
-## Foursquare-Tokyo, Gowalla-Stockholm-v1, Gowalla-Austin-v1
-
-```bash
-FOURSQUARE_RAW_DIR=/path/to/dataset_WWW2019 \
-GOWALLA_RAW_DIR=/path/to/loc-gowalla \
-  python -m preprocess.prepare_city_subsets
-```
-
-## LANL Auth. Log
-
-```bash
-LANL_RAW_DIR=/path/to/lanl_cyber1/raw \
-  python -m preprocess.prepare_lanl
-```
-
-## eICU-CRD demo
-
-```bash
-EICU_RAW_DIR=/path/to/eicu-collaborative-research-database-demo-2.0.1 \
-  python -m preprocess.prepare_eicu
-```
-
-## Social-link splits (one per LBSN city)
-
-```bash
-python -m preprocess.prepare_social_splits --dataset foursquare-tokyo
-python -m preprocess.prepare_social_splits --dataset gowalla-stockholm-v1
-python -m preprocess.prepare_social_splits --dataset gowalla-austin-v1
-```
-
-Splits land at `$TRAXION_DATA_DIR/social_splits/<dataset>/`.
+The commands, in order, are in §2 of the top-level [README](../README.md).

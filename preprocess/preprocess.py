@@ -247,15 +247,35 @@ def parse_args(args_list=None):
         choices=sorted(DATASET_PATHS.keys()),
         help="Dataset key to preprocess",
     )
+    parser.add_argument("--raw-train", default=None,
+                        help="raw training stay points (e.g. staypoints_train.tsv); "
+                        "default: the dataset's train path in config.py")
+    parser.add_argument("--raw-test", default=None,
+                        help="raw test stay points (e.g. staypoints_test.tsv); "
+                        "default: the dataset's test path in config.py")
     return parser.parse_args(args_list)
+
+
+# Datasets whose stays get a stop time: the next stay's start for the same
+# agent, or start + 1 h for an agent's last stay.
+INFER_STOP_DATASETS = {"urban-berlin"}
+
+
+def _infer_stop(df):
+    time_col = _resolve_time_column(df)
+    df = df.sort_values(by=["agent", time_col]).reset_index(drop=True)
+    start_ts = pd.to_datetime(df[time_col], errors="coerce")
+    next_start = start_ts.groupby(df["agent"]).shift(-1)
+    df["stop"] = next_start.fillna(start_ts + pd.Timedelta(hours=1))
+    return df
 
 
 if __name__ == "__main__":
     args = parse_args()
     dataset_cfg = get_dataset_config(args.dataset)
 
-    raw_train_data_path = dataset_cfg.raw_train_data_path
-    raw_test_data_path = dataset_cfg.raw_test_data_path
+    raw_train_data_path = args.raw_train or dataset_cfg.raw_train_data_path
+    raw_test_data_path = args.raw_test or dataset_cfg.raw_test_data_path
     poi_path = dataset_cfg.poi_path
     aoi_path = dataset_cfg.aoi_path
     dataset_metadata_path = dataset_cfg.dataset_metadata_path
@@ -284,6 +304,8 @@ if __name__ == "__main__":
         print(f"Inferred POI table saved to {poi_path}")
 
     train_df, test_df = _ensure_poi_id(train_df, test_df)
+    if args.dataset in INFER_STOP_DATASETS and "stop" not in train_df.columns:
+        train_df, test_df = _infer_stop(train_df), _infer_stop(test_df)
 
     # Use POI ID to get coordinates
     train_df = join_poi_coordinates(poi_df, train_df)

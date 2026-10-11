@@ -73,6 +73,8 @@ class AblationCriterion(nn.Module):
         poi_weight: float = 1.0,
         time_weight: float = 1.0,
         cat_weight: float = 1.0,
+        contrastive_weight: float = 0.0,
+        temperature: float = 0.1,
     ):
         super().__init__()
         if objective not in ("causal", "stm"):
@@ -82,6 +84,9 @@ class AblationCriterion(nn.Module):
         self.poi_weight = float(poi_weight)
         self.time_weight = float(time_weight)
         self.cat_weight = float(cat_weight)
+        # Optional entity-prototype (InfoNCE) term, as in utils/criterion.py.
+        self.contrastive_weight = float(contrastive_weight)
+        self.temperature = float(temperature)
 
     def select_eval_positions(self, batch: dict) -> torch.Tensor:
         """Where the loss is scored. For causal: every valid position (target
@@ -90,7 +95,7 @@ class AblationCriterion(nn.Module):
             return ~batch["padding_mask"].bool()  # (B, S) valid positions
         return batch["mask_positions"].bool()
 
-    def forward(self, logits_tuple, batch: dict):
+    def forward(self, logits_tuple, batch: dict, visit_emb=None, own_agent_emb=None):
         poi_logits, time_logits, cat_logits = logits_tuple
         padding_mask = batch["padding_mask"].bool()
         valid_mask = ~padding_mask  # (B, S)
@@ -132,8 +137,29 @@ class AblationCriterion(nn.Module):
             + self.time_weight * time_loss
             + self.cat_weight * cat_loss
         )
+        # Entity-prototype term (only with --keep_prototype). There is no
+        # perturbation on this path, so every valid visit is a normal visit.
+        contrastive_val = 0.0
+        if self.contrastive_weight > 0.0 and visit_emb is not None and own_agent_emb is not None:
+            normal_mask = valid_mask
+            valid_agents = normal_mask.any(dim=1)
+            if valid_agents.sum().item() >= 2:
+                visit_valid = visit_emb[normal_mask]
+                batch_indices = torch.arange(
+                    normal_mask.shape[0], device=visit_emb.device).unsqueeze(1)
+                visit_agent_idx = batch_indices.expand_as(normal_mask)[normal_mask]
+                visit_norm = F.normalize(visit_valid, p=2, dim=-1)
+                agent_norm = F.normalize(own_agent_emb, p=2, dim=-1)
+                sim = visit_norm @ agent_norm.T
+                sim[:, ~valid_agents] = -1e9
+                sim = sim / max(self.temperature, 1e-6)
+                contrastive = F.cross_entropy(sim, visit_agent_idx)
+                loss = loss + self.contrastive_weight * contrastive
+                contrastive_val = float(contrastive.item())
+
         loss_dict = {
             "total_loss": loss.item() if isinstance(loss, torch.Tensor) else float(loss),
+            "contrastive_loss": contrastive_val,
             "poi_loss": poi_loss.item() if isinstance(poi_loss, torch.Tensor) else float(poi_loss),
             "time_loss": time_loss.item() if isinstance(time_loss, torch.Tensor) else float(time_loss),
             "cat_loss": cat_loss.item() if isinstance(cat_loss, torch.Tensor) else float(cat_loss),

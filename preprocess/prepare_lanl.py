@@ -1,31 +1,29 @@
-"""Prepare LANL Unified Host/Network dataset for Clique pre-training.
+"""Prepare the LANL unified host-and-network authentication log for TraXion.
 
-Cross-domain target: lateral-movement / insider-threat detection.
-
-Mapping to Clique's (agent, poi, time, category) schema:
+Mapping to TraXion's (agent, poi, time, category) schema:
   agent      = src_user (U####@DOM#) performing the authentication
   poi_id     = dst_computer (C####) being accessed
   longitude,
-  latitude   = 2D UMAP embedding of the user x host bipartite access matrix
+  latitude   = 2D UMAP embedding of the user x host access-count matrix
   start      = synthetic datetime derived from auth time (seconds since day 0)
-  stop       = start (point events, same convention as Foursquare/Gowalla)
-  venue_type = host category string inferred from dominant auth_type at the host
+  stop       = start (point events)
+  venue_type = host category: the dominant (auth_type, logon_type) pair at the host
   act_types  = list[int] encoding of the host category (one entry per POI)
   anomaly    = 1 iff the (time, user, src, dst) tuple appears in redteam.txt
 
-Cohort (target ~3-5k agents, ~1-2M events, matches numosim-core scale):
-  - All users that appear as user in redteam.txt (attack users, ~99)
-  - Random sample of additional users until we hit the agent cap
-  - Per-user cap: keep at most MAX_EVENTS_PER_AGENT most-recent events
+Cohort:
+  - all users that appear as the source of a red-team event
+  - benign users sampled uniformly (among users with >= MIN_EVENTS_PER_AGENT
+    events) up to TARGET_N_AGENTS users in total
+  - per-user cap: keep the MAX_EVENTS_PER_AGENT most recent benign events;
+    every red-team event is kept
 
-Split:
-  Temporal: first 70% of the cohort event stream = train, last 30% = test.
-  Red-team events overwhelmingly land in days 2-27, so both splits carry
-  anomalies; we report visit-level AP/Max F1 on test.
+Split: temporal at day 11 (events before the cutoff go to train, the rest to
+test); test keeps only users seen in train.
 
-Output (to OUT_DIR):
-  lanl_train.parquet, lanl_test.parquet, lanl_poi.parquet,
-  lanl_aoi_box.geojson, lanl_dataset_metadata.parquet
+Output (to --out-dir, filename stem --tag):
+  <tag>_train.parquet, <tag>_test.parquet, <tag>_poi.parquet,
+  <tag>_aoi_box.geojson, <tag>_dataset_metadata.parquet
 """
 
 import argparse
@@ -62,10 +60,12 @@ BASE_DATETIME = pd.Timestamp("2015-01-01 00:00:00")
 TARGET_N_AGENTS = 4000
 MAX_EVENTS_PER_AGENT = 500
 MIN_EVENTS_PER_AGENT = 20  # drop very inactive users
-# Temporal split cutoff (seconds since the LANL epoch). Day 20 puts ~half of
-# the red-team window (days 2-30) in train and the other half in test.
-SPLIT_CUTOFF_SECONDS = 20 * 86400
+# Temporal split cutoff (seconds since the LANL epoch).
+SPLIT_CUTOFF_SECONDS = 11 * 86400
 RNG_SEED = 42
+# Host coordinates used in the paper (released with the code).
+HOST_COORDS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets",
+                           "lanl-core_host_coords.parquet")
 
 
 def parse_args(argv=None):
@@ -92,6 +92,10 @@ def parse_args(argv=None):
                    default=os.path.join(OUT_DIR, "_cohort_events.parquet"),
                    help="cache raw cohort-filtered events here; skip the expensive "
                    "two-pass auth.txt.gz scan if it already exists.")
+    p.add_argument("--host-coords", default=HOST_COORDS,
+                   help="parquet with poi_id, longitude, latitude per host. When the file "
+                   "exists, these coordinates are used instead of fitting UMAP (UMAP "
+                   "output differs across machines). Pass '' to fit UMAP.")
     p.add_argument("--split-cutoff-seconds", type=int, default=SPLIT_CUTOFF_SECONDS,
                    help="temporal train/test cutoff (seconds since LANL epoch). "
                    "Events with time<cutoff go to train, >=cutoff go to test.")
@@ -400,7 +404,7 @@ def assemble_stays(df, poi, attack_tuples):
     df["start"] = BASE_DATETIME + pd.to_timedelta(df["time"], unit="s")
     df["stop"] = df["start"]
 
-    # cat_0 one-hot index (legacy column kept for compatibility)
+    # cat_0: the category id as a float column (read by the data loaders).
     df["cat_0"] = df["act_types"].apply(lambda xs: float(xs[0])
                                         if isinstance(xs, list) and xs else 0.0)
 
@@ -437,7 +441,7 @@ def temporal_split(stays, split_cutoff_seconds):
 
 
 # ---------------------------------------------------------------------------
-# Step 6: Save in Clique format
+# Step 6: Save in the TraXion parquet layout
 # ---------------------------------------------------------------------------
 def save_outputs(out_dir, tag, train, test, poi):
     os.makedirs(out_dir, exist_ok=True)
@@ -528,7 +532,11 @@ def main():
 
     # Step 4: category encoding + UMAP coords
     host_cat_str, cat_to_id = encode_categories(df)
-    host_coords = fit_umap_host_coords(df, RNG_SEED)
+    if args.host_coords and os.path.isfile(args.host_coords):
+        print(f"\n[host coords] loading {args.host_coords}")
+        host_coords = pd.read_parquet(args.host_coords)[["poi_id", "longitude", "latitude"]]
+    else:
+        host_coords = fit_umap_host_coords(df, RNG_SEED)
     poi = build_poi_table(host_coords, host_cat_str, cat_to_id)
 
     # Step 5: assemble stays and anomaly flags

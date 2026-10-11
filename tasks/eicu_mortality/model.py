@@ -1,6 +1,6 @@
-"""Per-stay mortality classifier for the eICU-CRD demo task.
+"""Per-stay ICU mortality classifier (eICU-CRD and MIMIC-IV).
 
-Same FeatureEncoder + HumorStack backbone as the anomaly / POI-rec / TUL /
+Same FeatureEncoder + HumorStack backbone as the anomaly / POI-rec /
 social models (identical attribute names so anomaly checkpoints load with
 ``strict=False``).
 

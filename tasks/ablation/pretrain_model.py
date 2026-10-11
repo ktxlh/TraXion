@@ -32,6 +32,8 @@ class AblationPretrainModel(nn.Module):
 
         self.feature_encoder = FeatureEncoder(args)
         feature_dim = self.feature_encoder.feature_dim
+        self.keep_prototype = bool(getattr(args, "keep_prototype", False))
+        self._proto_dims = (int(args.model_dim), int(getattr(args, "hidden_dim", 256)))
         num_feats = self.feature_encoder.num_feats
         if feature_dim % args.n_heads != 0:
             raise ValueError(
@@ -74,6 +76,14 @@ class AblationPretrainModel(nn.Module):
         # STM to overwrite the agent-slot features at masked positions before
         # they enter the attention stack. Causal mode does not touch this.
         self.mask_emb = nn.Parameter(torch.zeros(num_feats, feature_dim))
+
+        if self.keep_prototype:
+            # Same shape as modules.model.Model.visit_emb_proj.
+            self.visit_emb_proj = nn.Sequential(
+                nn.Linear(self._proto_dims[0], self._proto_dims[1]),
+                nn.ReLU(),
+                nn.Linear(self._proto_dims[1], feature_dim),
+            )
         nn.init.normal_(self.mask_emb, std=0.02)
 
     def encode(
@@ -99,7 +109,8 @@ class AblationPretrainModel(nn.Module):
         If ``causal=True``, a triangular attn_mask is sent down to the
         sequence-axis attention so position t sees only positions 0..t.
         """
-        x, _own_agent_emb = self.feature_encoder(location, start, stop, category, agent)
+        x, own_agent_emb = self.feature_encoder(location, start, stop, category, agent)
+        self._own_agent_emb = own_agent_emb
         # x: (B, S, F, C, D)
 
         if mask_positions is not None:
@@ -126,6 +137,10 @@ class AblationPretrainModel(nn.Module):
         # x_out: (B, S, F, D) — the agent's own embedding stack
         h = x_out.reshape(x_out.shape[0], x_out.shape[1], -1)  # (B, S, model_dim)
         return h
+
+    def visit_embeddings(self, h: torch.Tensor):
+        """Projected per-visit embeddings for the prototype-contrastive term."""
+        return self.visit_emb_proj(h)
 
     def predict(self, h: torch.Tensor):
         return self.poi_head(h), self.time_head(h), self.cat_head(h)

@@ -136,7 +136,6 @@ def main(args: Any) -> None:
             perturb_locations=args.perturb_locations,
             perturb_timestamps=args.perturb_timestamps,
             behavioral_anomaly=args.behavioral_anomaly,
-            legacy_perturb_timestamps=getattr(args, "legacy_perturb_timestamps", False),
             insert_covisits=getattr(args, "insert_covisits", False),
             insert_recurring_visits=getattr(args, "insert_recurring_visits", False),
             insert_chained_visits=getattr(args, "insert_chained_visits", False),
@@ -148,11 +147,13 @@ def main(args: Any) -> None:
     train_data = CliqueDataset(train_stays, categories, args.clique_size,
                                noisifier=noisifier, anomaly_col=anomaly_col,
                                max_seq_len=args.max_seq_len,
-                               overlap_min_frac=overlap_min_frac)
+                               overlap_min_frac=overlap_min_frac,
+                               neighbor_search=args.neighbor_search)
     val_data = CliqueDataset(val_stays, categories, args.clique_size,
                              noisifier=noisifier, anomaly_col=anomaly_col,
                              max_seq_len=args.max_seq_len,
-                             overlap_min_frac=overlap_min_frac)
+                             overlap_min_frac=overlap_min_frac,
+                             neighbor_search=args.neighbor_search)
 
     model = Model(args)
     model.to(args.device)

@@ -1,11 +1,13 @@
-torch>=2.4
-numpy
-pandas
-scipy
-scikit-learn
-tqdm
-geopandas
-shapely
-pyarrow
-umap-learn
-wandb
+--extra-index-url https://download.pytorch.org/whl/cu124
+torch==2.6.0
+numpy==2.4.6
+pandas==2.3.3
+scipy==1.18.0
+scikit-learn==1.9.0
+geopandas==1.1.4
+shapely==2.1.2
+pyarrow==25.0.0
+umap-learn==0.5.12
+tqdm==4.70.0
+wandb==0.28.1
+reverse_geocode==1.6.6

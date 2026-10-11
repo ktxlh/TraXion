@@ -29,7 +29,7 @@ class WandbLogger:
             self.run = wandb.init(
                 entity=entity,
                 project=getattr(args, "wandb_project", None) or project,
-                dir=args.training_log_dir,
+                dir=getattr(args, "training_log_dir", None) or os.environ.get("TRAXION_RUNS_DIR"),
                 config=args,
                 job_type=job_type,
                 name=self.run_name,

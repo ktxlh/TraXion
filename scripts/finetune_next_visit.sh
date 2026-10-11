@@ -2,21 +2,24 @@
 # Fine-tune the pre-trained TraXion backbone for next-visit (joint POI + time) prediction.
 #
 # Usage:
-#   bash scripts/finetune_next_visit.sh <dataset> <pretrain_ckpt> [variant] [extra args ...]
-#   variant ∈ {active (TraXion), bypass (TraXion-NoColoc, default for next-visit)}
+#   bash scripts/finetune_next_visit.sh <dataset> <pretrain_ckpt> [route] [extra args ...]
 #
-# Recipe matches Appendix B (anchor-time head, time_loss_weight=0.3).
+#   route ∈ {active, bypass} (default: active). bypass skips the pre-trained
+#   co-occurrence sub-layer (--no_neighbor_attn). Run both routes for each seed
+#   and keep the one selected by scripts/select_route.py.
+#
+# Per-task fine-tune settings follow the fine-tuning table in Appendix B.
 set -euo pipefail
 
 if [[ $# -lt 2 ]]; then
-    echo "usage: $0 <dataset> <pretrain_ckpt> [variant=active|bypass] [extra args ...]" >&2
+    echo "usage: $0 <dataset> <pretrain_ckpt> [route=active|bypass] [extra args ...]" >&2
     exit 1
 fi
 
 DATASET="$1"; CKPT="$2"; shift 2
-VARIANT="bypass"
+ROUTE="active"
 if [[ $# -ge 1 && ( "$1" == "active" || "$1" == "bypass" ) ]]; then
-    VARIANT="$1"; shift
+    ROUTE="$1"; shift
 fi
 
 COMMON=(
@@ -32,7 +35,7 @@ COMMON=(
     --use_anchor_time_in_head --anchor_time_emb_dim 64 --anchor_time_modulo daily
 )
 
-[[ "$VARIANT" == "bypass" ]] && COMMON+=(--no_neighbor_attn)
+[[ "$ROUTE" == "bypass" ]] && COMMON+=(--no_neighbor_attn)
 
 case "$DATASET" in
     foursquare-tokyo)        EXTRA=(--clique_size 8) ;;

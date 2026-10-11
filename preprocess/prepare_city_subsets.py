@@ -1,4 +1,4 @@
-"""Prepare city-based subsets of Foursquare and Gowalla for Clique pre-training.
+"""Prepare city-based subsets of Foursquare and Gowalla for TraXion pre-training.
 
 Instead of k-core social filtering, this script extracts subsets by metropolitan
 area: venues are snapped to the nearest large city (pop >= 1M within 100km, or

@@ -1,14 +1,13 @@
-"""LANL test-time scorer that uses the pretrained checkpoint as-is.
+"""Dump LANL per-event scores from a pre-trained TraXion backbone (no fine-tuning).
 
-Dumps per-event (agent_idx, label, BCE_logit, visit_emb) for the train+test
-splits and the full agent prototype bank. Used for unsupervised post-hoc
-scoring on LANL: BCE noise score, prototype self-similarity, prototype
-impostor signal, and per-user score calibration.
+Writes, per split, each event's user index, red-team label, noise-detection logit
+and projected visit embedding, plus the user prototype bank (protos.npz).
+cli/score_lanl_unsup.py turns the test dump into the reported scores.
 
 Usage:
     python -m cli.evaluate_lanl_unsup --checkpoint /path/to.pt \
-        --out_dir logs/lanl_unsup_dumps/<tag> \
-        --device cuda:0 [--batch_size 32]
+        --out_dir logs/lanl_unsup_dumps/<tag> --skip_train \
+        --device cuda:0 [--batch_size 16]
 """
 
 import argparse
@@ -103,7 +102,7 @@ def main():
     from config import get_dataset_config
     from modules.model import Model
     from utils.file_io import load_dataset_metadata, load_pois, load_stays
-    from utils.training_data import ensure_category_columns, prepare_stays
+    from utils.training_data import ensure_category_columns, prepare_stays, training_agent_index
 
     dataset_name = getattr(args, "dataset", None)
     print(f"Dataset: {dataset_name}")
@@ -115,11 +114,11 @@ def main():
     args.n_categories = len(categories)
     min_time = metadata["min_time"]
 
-    # Rebuild train agent map (same as evaluate.py does).
+    # Rebuild the agent map exactly as training built it (same as evaluate.py does).
     print("Loading train stays for agent map ...")
     train_stays_raw = prepare_stays(load_stays("train", dataset_cfg), min_time=min_time)
     train_stays_raw = ensure_category_columns(train_stays_raw, categories)
-    unique_agents = pd.Index(train_stays_raw["agent"].unique())
+    unique_agents = training_agent_index(train_stays_raw)
     agent_to_idx = pd.Series(
         np.arange(len(unique_agents), dtype=np.int64), index=unique_agents
     )

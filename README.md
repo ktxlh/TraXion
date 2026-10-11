@@ -1,253 +1,261 @@
 # TraXion: Rethinking Pre-training Frameworks for Mobility and Beyond
 
-This repository is the official implementation of TraXion. It is the NeurIPS
-supplementary code asset associated with the submission and is licensed under
-the MIT License (see [`LICENSE`](LICENSE)).
+Official implementation of TraXion (NeurIPS 2026), released under the MIT License
+(see [`LICENSE`](LICENSE)).
 
-The codebase contains everything needed to reproduce every TraXion number reported
-in the paper: pre-training, per-task fine-tuning, evaluation, and the ablation
-variants. Baseline implementations live in their respective upstream repositories
-and are documented in the paper's appendix; only TraXion numbers are produced
-here.
+TraXion pre-trains one backbone per dataset on multi-entity spatiotemporal event
+streams and fine-tunes it per downstream task. This repository contains the data
+preparation, pre-training, fine-tuning, evaluation and ablation code behind every
+TraXion number in the paper.
 
 ```
 .
 ├── config.py                # dataset path registry (env-var driven)
-├── HYPERPARAMETER_SEARCH.md # hyperparameter-selection protocol (TraXion + baselines)
-├── cli/                     # entry-point scripts (run as python -m cli.<name>)
-│   ├── train.py             #   pre-training + anomaly fine-tune
-│   ├── train_poi.py         #   next-POI fine-tune
-│   ├── train_next_visit.py  #   next-visit (joint POI + time) fine-tune
-│   ├── train_social.py      #   social-link fine-tune
-│   ├── train_eicu.py        #   ICU-mortality fine-tune
-│   ├── train_ablation_pretrain.py   # variants C4 / C5 pre-training
+├── HYPERPARAMETER_SEARCH.md # hyperparameter-selection protocol and the verbatim agent prompt
+├── cli/                     # entry points (run as python -m cli.<name>)
+│   ├── train.py             #   pre-training + anomaly fine-tuning
+│   ├── train_poi.py         #   next-POI fine-tuning
+│   ├── train_next_visit.py  #   next-visit (joint POI + time) fine-tuning
+│   ├── train_social.py      #   social-link fine-tuning
+│   ├── train_eicu.py        #   ICU-mortality fine-tuning (eICU-CRD, MIMIC-IV)
+│   ├── train_ablation_pretrain.py   # autoregressive / masked-token pre-training (ablation C4 / C5)
 │   ├── evaluate*.py         #   per-task evaluators
-│   └── score_lanl_unsup.py  #   LANL rank-fusion scorer
-├── modules/                 # backbone (factorized attention, prototype, embeddings)
+│   └── score_lanl_unsup.py  #   LANL scoring: rank fusion of the two pre-training heads
+├── modules/                 # backbone (factorized attention, entity prototype, embeddings)
 ├── tasks/                   # per-task heads, datasets, criteria, metrics
-├── utils/                   # argparse, dataset, noisifier, training runtime, ...
-├── preprocess/              # one prepare_*.py per public dataset
-└── scripts/                 # bash wrappers with paper-default hyperparameters
+├── utils/                   # argparse, dataset, perturbation operator, training runtime, ...
+├── preprocess/              # data preparation, one script per source
+└── scripts/                 # run scripts with the paper's hyperparameters
 ```
 
-All `cli/*.py` scripts are entry points. Run them from the project root using
-`python -m cli.<name>` (e.g. `python -m cli.train ...`); this puts the project
-root on `sys.path` so that absolute imports such as `from config import ...`
-resolve correctly.
+Run everything from the repository root (`python -m cli.<name> ...`).
 
 
-## 1. Environment setup
+## 1. Environment
 
 ```bash
 conda env create -f environment.yml
 conda activate traxion
 ```
 
-A pip-only fallback (`pip install -r requirements.txt`) works against any
-recent CUDA-12 PyTorch wheel.
+or `pip install -r requirements.txt` in a Python 3.13 environment. The paper's
+runs used Python 3.13 and PyTorch 2.6.0 (CUDA 12.4), each on one NVIDIA RTX 6000
+Ada (48 GB). Fine-tuning on the full eICU-CRD corpus needs about 82 GiB of host
+memory.
 
-GPU: every run reported in the paper completes on a single NVIDIA RTX 6000 Ada
-(48 GB) within five days end-to-end (pre-train + per-task fine-tune).
+Paths are set with two environment variables:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `TRAXION_DATA_DIR` | `./data` | prepared datasets, `<dataset>/<dataset>_{train,test,poi,...}.parquet` |
+| `TRAXION_RUNS_DIR` | `./runs` | checkpoints |
+
+Training logs to Weights & Biases with `--use_wandb` (set `WANDB_ENTITY` and,
+optionally, `--wandb_project`).
 
 
 ## 2. Data preparation
 
-TraXion uses eight public datasets. Download each from its official source under
-its license, then run the matching preparation script. By default scripts read
-`$TRAXION_DATA_DIR` (default `./data`) and write back to the same root in the
-canonical layout `<TRAXION_DATA_DIR>/<dataset>/<dataset>_{train,test,poi,
-dataset_metadata}.parquet`. Override with `export TRAXION_DATA_DIR=/path/to/data`.
+Download each dataset from its official source under its license; we do not
+redistribute any raw dataset.
 
-| Dataset (paper)        | `--dataset` flag        | Source / license |
-|------------------------|-------------------------|------------------|
-| NUMOSIM-LA             | `numosim`               | OSF `osf.io/sjyfr` (public release; no formal license) |
-| Urban Anomalies-Berlin | `urban-berlin`          | OSF `osf.io/dg6t3` (CC-BY 4.0) |
-| Urban Anomalies-Atlanta| `urban-atlanta`         | OSF `osf.io/dg6t3` (CC-BY 4.0) |
-| Foursquare-Tokyo       | `foursquare-tokyo`      | Yang's homepage / WWW2019 (citation required) |
-| Gowalla-Stockholm      | `gowalla-stockholm-v1`  | SNAP / Stanford (citation required) |
-| Gowalla-Austin         | `gowalla-austin-v1`     | SNAP / Stanford (citation required) |
-| LANL Auth. Log         | `lanl-core`             | `csr.lanl.gov/data/cyber1` (CC0 / public domain) |
-| eICU-CRD demo          | `eicu-demo`             | PhysioNet (Open Database License, ODbL) |
-
-Preparation commands:
+| Dataset | `--dataset` | Source / license |
+|---|---|---|
+| NUMOSIM-LA | `numosim` | OSF `osf.io/sjyfr` |
+| Urban Anomalies-Berlin / -Atlanta | `urban-berlin`, `urban-atlanta` | OSF `osf.io/dg6t3` (CC-BY 4.0) |
+| Foursquare-Tokyo | `foursquare-tokyo` | Yang et al., WWW 2019 (research use, citation) |
+| Gowalla-Stockholm / -Austin | `gowalla-stockholm-v1`, `gowalla-austin-v1` | SNAP (research use, citation); POI categories from OpenStreetMap (ODbL) |
+| LANL authentication log | `lanl-core` | `csr.lanl.gov/data/cyber1` (CC0) |
+| eICU-CRD 2.0 | `eicu-full` (fine-tuning), `eicu-full-pid` (pre-training) | PhysioNet Credentialed Health Data License |
+| MIMIC-IV 3.1 | `mimiciv-full` (fine-tuning), `mimiciv-full-pid` (pre-training) | PhysioNet Credentialed Health Data License |
 
 ```bash
-# NUMOSIM-LA: place the OSF-released parquet files at
-#   $TRAXION_DATA_DIR/numosim/numosim_{train,test,poi,dataset_metadata}.parquet
-#   plus numosim_aoi_box.geojson. No script is needed — the raw release is
-#   already in the expected layout.
+# NUMOSIM-LA (stay_points_train.parquet, stay_points_test_anomalous.parquet, poi.parquet)
+NUMOSIM_RAW_DIR=/path/to/NUMOSIM/LA python -m preprocess.prepare_numosim
 
-# Urban Anomalies (Berlin / Atlanta): place the released staypoints TSVs at
-#   $TRAXION_DATA_DIR/urban-{berlin,atlanta}/staypoints_{train,test}.tsv
-#   plus the city's POI parquet and dataset_metadata. The OSF release ships
-#   each city already in the expected schema.
+# Urban Anomalies (staypoints_{train,test}.tsv of the *_combined_outliers release)
+python -m preprocess.preprocess --dataset urban-berlin \
+    --raw-train /path/to/Berlin/berlin_combined_outliers/staypoints_train.tsv \
+    --raw-test  /path/to/Berlin/berlin_combined_outliers/staypoints_test.tsv
+python -m preprocess.preprocess --dataset urban-atlanta \
+    --raw-train /path/to/Atlanta/atlanta_combined_outliers/staypoints_train.tsv \
+    --raw-test  /path/to/Atlanta/atlanta_combined_outliers/staypoints_test.tsv
 
 # Foursquare-Tokyo and Gowalla-{Stockholm,Austin}-v1
-#   put the WWW2019 Foursquare release under $FOURSQUARE_RAW_DIR and the
-#   Gowalla SNAP release under $GOWALLA_RAW_DIR, then run:
-python -m preprocess.prepare_city_subsets
+FOURSQUARE_RAW_DIR=/path/to/dataset_WWW2019 GOWALLA_RAW_DIR=/path/to/loc-gowalla \
+    python -m preprocess.prepare_city_subsets
+# Gowalla POI categories: nearest OpenStreetMap feature within 50 m
+# (downloads the 2026-04-21 OSM snapshot from the Overpass API)
+python -m preprocess.assign_gowalla_categories --dataset gowalla-stockholm-v1
+python -m preprocess.assign_gowalla_categories --dataset gowalla-austin-v1
+# Social-link edge splits
+for d in foursquare-tokyo gowalla-stockholm-v1 gowalla-austin-v1; do
+    python -m preprocess.prepare_social_splits --dataset $d
+done
 
-# LANL — point at the gzipped auth.txt.gz / redteam.txt.gz from cyber1:
-LANL_RAW_DIR=/path/to/lanl/raw \
-  python -m preprocess.prepare_lanl
+# LANL (auth.txt.gz, redteam.txt.gz). Host coordinates are read from
+# preprocess/assets/lanl-core_host_coords.parquet.
+LANL_RAW_DIR=/path/to/lanl/cyber1 python -m preprocess.prepare_lanl
 
-# eICU-CRD demo — point at the downloaded CSV-bundle directory:
-EICU_RAW_DIR=/path/to/eicu-collaborative-research-database-demo-2.0.1 \
-  python -m preprocess.prepare_eicu
-
-# Social-link splits (one per LBSN city)
-python -m preprocess.prepare_social_splits --dataset foursquare-tokyo
-python -m preprocess.prepare_social_splits --dataset gowalla-stockholm-v1
-python -m preprocess.prepare_social_splits --dataset gowalla-austin-v1
+# eICU-CRD and MIMIC-IV: stay-keyed corpora, then patient-keyed copies for pre-training
+EICU_RAW_DIR=/path/to/physionet.org/files/eicu-crd/2.0 python -m preprocess.prepare_eicu
+MIMICIV_RAW_DIR=/path/to/physionet.org/files/mimiciv/3.1 python -m preprocess.prepare_mimiciv
+python -m preprocess.rekey_patient --src eicu-full --dst eicu-full-pid
+python -m preprocess.rekey_patient --src mimiciv-full --dst mimiciv-full-pid
 ```
 
 
 ## 3. Reproducing the paper
 
-Each row in every results table comes from **(i) one pre-training run per
-dataset, then (ii) one fine-tuning run per (task × model variant × seed)**.
-Every command below runs end-to-end on a single GPU; pass `--seed 0`, `--seed
-101`, `--seed 202` for the three-seed protocol (single seed for NUMOSIM-LA per
-the paper).
-
-`$WANDB_ENTITY` (optional) sets the W&B entity; logs go offline if W&B is
-disabled with `--no_wandb`. All checkpoints land in `$TRAXION_RUNS_DIR`
-(default `./runs`).
-
-The ready-to-copy reproduction commands for every cell are in
-[`scripts/`](scripts/). A summary of the calling convention follows; see the
-paper's Appendix B for the full hyperparameter tables.
-
-### 3.1 Pre-training (one per dataset)
+Each dataset has one pre-trained backbone (five on LANL, one per seed), shared by
+all of its downstream tasks. Each task is then fine-tuned with seeds 1–5. For every
+seed, both co-occurrence routes are fine-tuned — `active` (default) and `bypass`
+(the pre-trained co-occurrence sub-layer is skipped, `--no_neighbor_attn`) — and
+the route with the better validation criterion is kept:
 
 ```bash
-bash scripts/pretrain.sh <dataset> [--seed 0] [--device cuda:0]
+python scripts/select_route.py --active runs/<active>.pt --bypass runs/<bypass>.pt
 ```
 
-Equivalently — for example, NUMOSIM-LA:
+The selected checkpoint is then evaluated on the test split. Reported numbers are
+mean ± standard deviation over the five seeds.
+
+### 3.1 Pre-training
 
 ```bash
-python -m cli.train --dataset numosim --device cuda:0 \
-    --time_modulo weekly --clique_size 8 \
-    --num_epochs 200 --early_stopping_patience 20 \
-    --perturb_locations --perturb_timestamps \
-    --no-insert_visits --no-behavioral_anomaly \
-    --early_stopping_criterion total_loss --ema_early_stopping \
-    --lr 2e-4
+bash scripts/pretrain.sh <dataset> --device cuda:0 [--use_wandb]
 ```
 
-The script `scripts/pretrain.sh` switches `--time_modulo`, `--clique_size`,
-`--lambda_{min,max}`, `--num_epochs`, and `--early_stopping_patience` per
-dataset to match Appendix Table 5 of the paper. eICU additionally drops the
-agent embedding and uses a smaller backbone:
+`<dataset>` is one of `numosim`, `urban-atlanta`, `urban-berlin`,
+`foursquare-tokyo`, `gowalla-stockholm-v1`, `gowalla-austin-v1`, `lanl-core`
+(run with `--seed 0` … `--seed 4`), `eicu-full-pid`, `mimiciv-full-pid`. The
+checkpoint is written to `$TRAXION_RUNS_DIR/<run id>.pt`.
+
+### 3.2 Fine-tuning and evaluation
 
 ```bash
-python -m cli.train --dataset eicu-demo --device cuda:0 \
-    --time_modulo daily --clique_size 4 --no_agent_emb \
-    --model_dim 128 --num_layers 2 --n_heads 4 --max_seq_len 32 \
-    --num_epochs 200 --early_stopping_patience 40 \
-    --early_stopping_criterion total_loss --ema_early_stopping --lr 2e-4
-```
-
-### 3.2 Fine-tuning per (task × variant)
-
-TraXion and TraXion-NoColoc are fine-tuned **separately** from the same pre-trained
-backbone. TraXion-NoColoc additionally passes `--no_neighbor_attn`.
-
-```bash
-# anomaly detection
-bash scripts/finetune_anomaly.sh <dataset> <pretrain_ckpt> [variant] [--seed 0]
-
-# next-POI recommendation
-bash scripts/finetune_poi.sh <dataset> <pretrain_ckpt> [variant] [--seed 0]
-
-# next-visit (joint POI + time)
-bash scripts/finetune_next_visit.sh <dataset> <pretrain_ckpt> [variant] [--seed 0]
-
-# social-link inference
-bash scripts/finetune_social.sh <dataset> <pretrain_ckpt> [variant] [--seed 0]
-
-# ICU mortality prediction
-bash scripts/finetune_eicu.sh <pretrain_ckpt> [--seed 1]
-```
-
-`variant` is `active` for TraXion (default) or `bypass` for TraXion-NoColoc.
-
-LANL fine-tuning uses a task-specific perturbation operator (`--user_host_swap`),
-the noise-detection BCE head, and rank fusion of the two pre-training heads at
-test time:
-
-```bash
-bash scripts/finetune_lanl.sh <pretrain_ckpt> [variant] [--seed 0]
-# After fine-tuning, dump per-event scores and apply rank fusion:
-python -m cli.evaluate_lanl_unsup --checkpoint runs/<finetune_id>.pt \
-    --out_dir logs/lanl_unsup_dumps/<tag> --no_wandb --device cuda:0
-python -m cli.score_lanl_unsup --dump_dir logs/lanl_unsup_dumps/<tag>
-```
-
-### 3.3 Ablation study (Section 4.6)
-
-The ablation table reports seven variants C1–C7. **Each variant has its own
-pre-training run**, and each task is then fine-tuned from that variant's own
-backbone. Pre-training:
-
-```bash
-# Per-variant ablation pre-training on UA-Berlin / Gowalla-Austin-v1 / LANL.
-bash scripts/ablation.sh pretrain <dataset> <variant>     # variant ∈ {C1..C7}
-```
-
-Fine-tuning a downstream task from a variant's backbone is identical to §3.2
-but with `<pretrain_ckpt>` pointing at the variant's pre-training checkpoint
-and (per the paper) reading the better of the active/bypass settings on
-validation.
-
-```bash
-bash scripts/ablation.sh finetune <task> <dataset> <variant_pretrain_ckpt>
-```
-
-### 3.4 Evaluation (re-running test metrics on a saved checkpoint)
-
-```bash
+# Mobility anomaly detection (Table 1): numosim, urban-atlanta, urban-berlin
+bash scripts/finetune_anomaly.sh <dataset> <pretrain_ckpt> <active|bypass> --seed <1-5>
 python -m cli.evaluate --checkpoint runs/<id>.pt --no_wandb --device cuda:0
+
+# Next-POI recommendation (Table 2): foursquare-tokyo, gowalla-stockholm-v1, gowalla-austin-v1
+bash scripts/finetune_poi.sh <dataset> <pretrain_ckpt> <active|bypass> --seed <1-5>
 python -m cli.evaluate_poi --checkpoint runs/poi_rec_<id>.pt --no_wandb --device cuda:0
+
+# Next-visit prediction (Table 2); T±60 is the key time/t@60min/mass
+bash scripts/finetune_next_visit.sh <dataset> <pretrain_ckpt> <active|bypass> --seed <1-5>
 python -m cli.evaluate_next_visit --checkpoint runs/next_visit_<id>.pt --no_wandb --device cuda:0
-python -m cli.evaluate_social --checkpoint runs/social_<id>.pt --no_wandb --device cuda:0
-python -m cli.evaluate_eicu --checkpoint runs/eicu_<id>.pt --no_wandb --device cuda:0
+
+# Social-link inference (Table 3); reports the "TEST:" line at the validation-selected alpha
+bash scripts/finetune_social.sh <dataset> <pretrain_ckpt> <active|bypass> --seed <1-5>
+python -m tasks.social.ensemble_eval --dataset <dataset> --social_checkpoint runs/social_<id>.pt --device cuda:0
+
+# ICU mortality (Table 5): eicu-full, mimiciv-full, from the matching *-pid backbone.
+# Test metrics are printed at the end of training; to recompute them:
+bash scripts/finetune_eicu.sh <dataset> <pretrain_ckpt> <active|bypass> --seed <1-5>
+python -m cli.evaluate_eicu --dataset <dataset> --resume_from_checkpoint runs/eicu_<id>.pt --device cuda:0
 ```
 
-All evaluators print the metrics reported in the corresponding paper table
-to four decimal places. Train scripts already run a final test-set evaluation
-at the end of training; the standalone evaluators are useful for re-scoring
-released checkpoints.
+**Enterprise authentication logs (Table 4).** The pre-trained LANL backbones are
+scored directly, without fine-tuning, by rank-fusing the noise-detection and
+prototype-contrastive heads. For each of the five backbones:
 
-### 3.5 Hyperparameter selection
+```bash
+python -m cli.evaluate_lanl_unsup --checkpoint runs/<pretrain_id>.pt \
+    --out_dir logs/lanl/<pretrain_id> --skip_train --batch_size 16 --device cuda:0
+python -m cli.score_lanl_unsup --dump_dir logs/lanl/<pretrain_id>
+```
 
-The hyperparameter values baked into `scripts/*.sh` are the *outcome* of a
-validation-guided iterative search rather than a pre-committed grid. The same
-procedure is applied to TraXion and to every retuned baseline. See
-[`HYPERPARAMETER_SEARCH.md`](HYPERPARAMETER_SEARCH.md) for the full protocol
-and the LLM-agent prompt.
+`score_lanl_unsup` prints event-level (`event/*`) and user-level (`user/*`) AP,
+AUROC and Max F1.
+
+### 3.3 Ablation study (Table 6)
+
+`scripts/ablation.sh` runs every cell of Table 6 (rows Full and C1–C7)
+with all hyperparameters passed explicitly.
+
+```bash
+bash scripts/ablation.sh pretrain   <arm> <task> [--seed N] [--device cuda:0]
+bash scripts/ablation.sh finetune   <arm> <task> <pretrain_ckpt> [--device cuda:0]
+bash scripts/ablation.sh finetune   C6    <task> [--seed N] [--device cuda:0]
+bash scripts/ablation.sh evaluate   <task> <finetuned_ckpt> [--device cuda:0]
+bash scripts/ablation.sh score-lanl <ckpt> <out_dir> [--device cuda:0]
+```
+
+| `task` | Dataset | Route | Reported metrics |
+|---|---|---|---|
+| `mobility_ad` | UA-Berlin | active | `combined/agent/AP`, `combined/agent/Max F1` |
+| `next_visit` | Gowalla-Austin | bypass | `loc/recall@10`, `time/t@60min/mass` |
+| `social` | Gowalla-Austin | active | AP, Hits@10 (model score) |
+| `auth_log` | LANL | active | `user/AP`, `user/MaxF1` (`score-lanl`) |
+
+`arm` is one of `Full`, `C1` (w/o L_prototype), `C2` (w/o L_noise),
+`C3` (w/o prototype-as-input), `C4` (autoregressive next-token pre-training),
+`C5` (masked-token pre-training), `C6` (no pre-training) and
+`C7` (flat transformer encoder). Pre-training is per arm and task; C6 has
+none and is trained from random weights by `finetune C6 <task>`.
+
+Cells with ± average five runs:
+
+- `mobility_ad`: Full and C5 over pre-training seeds 0, 101, 202, 303, 404.
+- `next_visit`: Full over pre-training seeds 101, 202, 303, 404, 505; C4 and C5 over 0, 101, 202, 303, 404.
+- `social`: every pre-trained arm over pre-training seeds 0, 101, 202, 303, 404; C6 over fine-tuning seeds 0, 101, 202, 303, 404.
+- `auth_log`: Full over pre-training seeds 0–4; C6 over seeds 0, 101, 202, 303, 404.
+
+The fine-tuning seed is fixed by the script. Full on `auth_log` is scored
+without fine-tuning:
+
+```bash
+bash scripts/ablation.sh pretrain Full auth_log --seed 1 --device cuda:0
+bash scripts/ablation.sh score-lanl runs/<id>.pt logs/ablation/full_s1 --device cuda:0
+```
+
+Example for one single-run cell (C3, next-visit):
+
+```bash
+bash scripts/ablation.sh pretrain C3 next_visit --device cuda:0
+bash scripts/ablation.sh finetune C3 next_visit runs/<pretrain_id>.pt --device cuda:0
+bash scripts/ablation.sh evaluate next_visit runs/next_visit_<id>.pt --device cuda:0
+```
+
+### 3.4 Hyperparameter selection
+
+The values in `scripts/*.sh` are the outcome of a validation-guided iterative
+search, applied identically to TraXion and to every retuned baseline. See
+[`HYPERPARAMETER_SEARCH.md`](HYPERPARAMETER_SEARCH.md) for the protocol and the
+verbatim prompt of the agent that ran it.
 
 
-## 4. Mapping paper terminology to CLI flags
+## 4. Paper notation and CLI flags
 
-| Paper symbol / term                | CLI                                |
-|-----------------------------------|------------------------------------|
-| co-occurrence size $C$             | `--clique_size`                    |
+| Paper | CLI |
+|---|---|
+| co-occurrence window size $C$ | `--clique_size` |
 | Space2Vec scale range $[\lambda_{\min},\lambda_{\max}]$ | `--lambda_min`, `--lambda_max` |
-| Time2Vec wrap period $P$           | `--time_modulo {weekly,daily,none}`|
-| $\mathcal{L}_{\text{noise}}$ off (C2 ablation) | `--no_noise_loss` (alias `--no_bce`) |
-| prototype-as-input off (C3)        | `--no_agent_emb` + `--model_dim 1024` |
-| flat transformer encoder (C7)      | `--use_transformer_encoder`        |
-| TraXion-NoColoc (bypass at fine-tune)| `--no_neighbor_attn`               |
-| LANL fine-tune perturbation $\eta_{\text{LANL}}$ | `--user_host_swap --user_host_swap_frac 0.3` |
-| anchor-time in next-visit head     | `--use_anchor_time_in_head --anchor_time_emb_dim 64 --anchor_time_modulo daily` |
+| Time2Vec wrap period | `--time_modulo {weekly,daily,none}` |
+| co-occurrence route: bypass | `--no_neighbor_attn` |
+| context / time perturbation of the operator $\eta$ | `--perturb_locations`, `--perturb_timestamps` |
+| ablation C1 (w/o $\mathcal{L}_{\text{prototype}}$) | `--no_contrastive` |
+| ablation C2 (w/o $\mathcal{L}_{\text{noise}}$) | `--no_bce` |
+| ablation C3 (w/o prototype-as-input) | `--no_agent_emb --model_dim 1024` |
+| ablation C4 / C5 (autoregressive / masked-token) | `cli.train_ablation_pretrain --pretrain_objective {causal,stm}` (+ `--keep_prototype` to add $\mathcal{L}_{\text{prototype}}$) |
+| ablation C7 (flat transformer encoder) | `--use_transformer_encoder` |
 
 
-## 5. License
+## 5. Citation
 
-This codebase is released under the MIT License (`LICENSE`). Each public
-dataset listed in §2 is consumed under its own published license (CC-BY 4.0,
-ODbL, CC0, or research-citation terms); we do not redistribute any raw dataset.
-Baseline implementations referenced in the paper retain the licenses of their
-upstream repositories.
+```bibtex
+@inproceedings{hsu2026traxion,
+  title     = {TraXion: Rethinking Pre-training Frameworks for Mobility and Beyond},
+  author    = {Hsu, Shang-Ling and Tenzer, Mark and Shahabi, Cyrus and Shafique, Khurram},
+  booktitle = {Advances in Neural Information Processing Systems},
+  year      = {2026}
+}
+```
+
+
+## 6. License
+
+The code is released under the MIT License. Each dataset is used under its own
+license (§2). Gowalla POI categories are derived from OpenStreetMap data,
+© OpenStreetMap contributors, available under the Open Database License.
