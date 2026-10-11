@@ -151,7 +151,6 @@ pretrain() {
                     fi ;;
                 C2)
                     BUDGET=(--num_epochs 800 --early_stopping_patience 80)
-                    BATCH=(--train_batch_size 1 --val_batch_size 1)
                     NOISE=("${NONE[@]}") ;;
             esac ;;
         next_visit)
